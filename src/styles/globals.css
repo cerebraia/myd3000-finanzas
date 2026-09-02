@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --myd-navy: #0F2244;
+    --myd-blue: #1D4ED8;
+    --myd-background: #F4F6FA;
+    --myd-surface: #FFFFFF;
+    --myd-border: #DDE3EE;
+    --myd-text: #0F172A;
+    --myd-success: #059669;
+    --myd-warning: #D97706;
+    --myd-danger: #DC2626;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    font-family: Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-base text-content-primary;
+    min-height: 100dvh;
+  }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: #EEF2F8; }
+  ::-webkit-scrollbar-thumb { background: #C8D0E0; border-radius: 3px; }
+}
+
+@layer utilities {
+  .sidebar-bg { background-color: var(--myd-navy); }
+  .sidebar-transition { transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
+}
