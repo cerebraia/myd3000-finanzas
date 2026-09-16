@@ -93,7 +93,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signIn(email: string, password: string): Promise<{ error: Error | null }> {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    return { error: error as Error | null }
+    if (error) {
+      const originalErr = (error as { originalError?: unknown }).originalError
+      console.warn('[AUTH] signInWithPassword error', {
+        name: error.name,
+        code: error.code,
+        status: error.status,
+        message: error.message,
+        originalError: originalErr instanceof Error
+          ? { name: originalErr.name, message: originalErr.message }
+          : originalErr,
+      })
+      const code = error.code ?? ''
+      const friendlyMsg =
+        code === 'invalid_credentials' || error.message?.includes('Invalid login credentials')
+          ? 'Correo o contraseña incorrectos.'
+          : code === 'email_not_confirmed' || error.message?.includes('Email not confirmed')
+            ? 'Debes confirmar tu correo electrónico antes de ingresar.'
+            : code === 'user_banned'
+              ? 'Tu usuario está desactivado. Contacta al administrador.'
+              : code === 'over_request_rate_limit'
+                ? 'Demasiados intentos. Espera unos minutos e intenta nuevamente.'
+                : `No pudimos iniciar sesión. (${error.name}: ${error.message ?? 'sin detalles'})`
+      return { error: new Error(friendlyMsg) }
+    }
+    return { error: null }
   }
 
   async function signOut(): Promise<void> {

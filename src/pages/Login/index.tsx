@@ -34,15 +34,10 @@ export default function Login() {
     try {
       const { error } = await signIn(data.email, data.password)
       if (error) {
-        const msg = error.message?.toLowerCase() ?? ''
-        if (msg.includes('invalid') || msg.includes('credentials') || msg.includes('password')) {
-          setError('root', { message: 'Correo o contraseña incorrectos.' })
-        } else {
-          setError('root', { message: 'No pudimos iniciar sesión. Intenta nuevamente.' })
-        }
+        setError('root', { message: error.message })
       }
     } catch {
-      setError('root', { message: 'No pudimos iniciar sesión. Intenta nuevamente.' })
+      setError('root', { message: 'No pudimos iniciar sesión. Verifica tu conexión.' })
     }
   }
 
