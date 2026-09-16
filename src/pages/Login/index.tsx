@@ -6,11 +6,14 @@ import { z } from 'zod'
 import { useAuth } from '@/contexts/AuthContext'
 
 const schema = z.object({
-  email: z.string().email('Correo inválido'),
-  password: z.string().min(6, 'Mínimo 6 caracteres'),
+  email: z.string().email('Ingresa un correo válido'),
+  password: z.string().min(1, 'Ingresa tu contraseña'),
 })
 
 type FormData = z.infer<typeof schema>
+
+const inputCls =
+  'w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--myd-blue)] focus:border-transparent transition bg-white'
 
 export default function Login() {
   const { signIn, session } = useAuth()
@@ -28,48 +31,67 @@ export default function Login() {
   } = useForm<FormData>({ resolver: zodResolver(schema) })
 
   async function onSubmit(data: FormData) {
-    const { error } = await signIn(data.email, data.password)
-    if (error) {
-      setError('root', { message: 'Credenciales incorrectas. Verifica tu correo y contraseña.' })
+    try {
+      const { error } = await signIn(data.email, data.password)
+      if (error) {
+        const msg = error.message?.toLowerCase() ?? ''
+        if (msg.includes('invalid') || msg.includes('credentials') || msg.includes('password')) {
+          setError('root', { message: 'Correo o contraseña incorrectos.' })
+        } else {
+          setError('root', { message: 'No pudimos iniciar sesión. Intenta nuevamente.' })
+        }
+      }
+    } catch {
+      setError('root', { message: 'No pudimos iniciar sesión. Intenta nuevamente.' })
     }
   }
 
   return (
-    <div className="min-h-screen flex bg-gray-50">
-      {/* Panel izquierdo (decorativo) */}
-      <div className="hidden lg:flex lg:w-1/2 bg-brand-900 flex-col justify-between p-12">
-        <div>
-          <span className="text-white font-bold text-2xl tracking-tight">MYD</span>
-          <span className="text-blue-400 font-bold text-2xl">3000</span>
-        </div>
-        <div>
-          <p className="text-white text-3xl font-light leading-snug">
-            Sistema administrativo<br />
-            <span className="font-semibold">interno.</span>
-          </p>
-          <p className="text-slate-400 mt-3 text-sm leading-relaxed">
-            Gestión de proyectos, clientes, finanzas y operaciones<br />
-            en un solo lugar.
-          </p>
-        </div>
-        <p className="text-slate-600 text-xs">© 2026 MYD3000. Uso interno.</p>
+    <div className="min-h-screen flex" style={{ backgroundColor: 'var(--myd-bg)' }}>
+      {/* Left panel */}
+      <div
+        className="hidden lg:flex lg:w-1/2 flex-col items-center justify-center p-12"
+        style={{ backgroundColor: 'var(--myd-navy)' }}
+      >
+        <img
+          src="/brand/myd3000-logo.svg"
+          alt="MYD3000"
+          className="h-12 w-auto"
+        />
+        <p className="text-slate-400 mt-8 text-sm text-center leading-relaxed max-w-xs">
+          Sistema administrativo interno.<br />
+          Gestión de proyectos, clientes y operaciones.
+        </p>
+        <p className="text-slate-600 text-xs mt-auto">© 2026 MYD3000. Uso interno.</p>
       </div>
 
-      {/* Panel derecho - formulario */}
-      <div className="flex flex-col flex-1 items-center justify-center p-6">
+      {/* Right panel – form */}
+      <div className="flex flex-col flex-1 items-center justify-center p-6 bg-white">
         <div className="w-full max-w-sm">
-          {/* Logo mobile */}
-          <div className="lg:hidden mb-8 text-center">
-            <span className="text-brand-900 font-bold text-2xl tracking-tight">MYD</span>
-            <span className="text-blue-600 font-bold text-2xl">3000</span>
+          {/* Logo (always visible on mobile, hidden on desktop since left panel shows it) */}
+          <div className="mb-8 text-center lg:hidden">
+            <img
+              src="/brand/myd3000-logo-dark.svg"
+              alt="MYD3000"
+              className="h-8 w-auto mx-auto"
+            />
           </div>
 
-          <h2 className="text-xl font-semibold text-gray-800">Iniciar sesión</h2>
-          <p className="text-sm text-gray-500 mt-1 mb-7">Ingresa tus credenciales para continuar.</p>
+          {/* Desktop: no logo since it's on the left */}
+          <div className="hidden lg:block mb-8">
+            <img
+              src="/brand/myd3000-logo-dark.svg"
+              alt="MYD3000"
+              className="h-8 w-auto"
+            />
+          </div>
+
+          <h2 className="text-xl font-semibold text-[var(--myd-text)]">Sistema Administrativo</h2>
+          <p className="text-sm text-[var(--myd-muted)] mt-1 mb-7">Acceso interno MYD3000</p>
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="email" className="block text-sm font-medium text-[var(--myd-text)] mb-1">
                 Correo electrónico
               </label>
               <input
@@ -77,7 +99,7 @@ export default function Login() {
                 type="email"
                 autoComplete="email"
                 {...register('email')}
-                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent transition"
+                className={inputCls}
                 placeholder="correo@myd3000.com"
               />
               {errors.email && (
@@ -86,7 +108,7 @@ export default function Login() {
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="password" className="block text-sm font-medium text-[var(--myd-text)] mb-1">
                 Contraseña
               </label>
               <input
@@ -94,7 +116,7 @@ export default function Login() {
                 type="password"
                 autoComplete="current-password"
                 {...register('password')}
-                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent transition"
+                className={inputCls}
                 placeholder="••••••••"
               />
               {errors.password && (
@@ -111,9 +133,10 @@ export default function Login() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-medium py-2.5 px-4 rounded-lg text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2"
+              className="w-full text-white font-medium py-2.5 px-4 rounded-lg text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--myd-blue)] focus:ring-offset-2 disabled:opacity-60"
+              style={{ backgroundColor: 'var(--myd-blue)' }}
             >
-              {isSubmitting ? 'Ingresando...' : 'Ingresar'}
+              {isSubmitting ? 'Iniciando sesión...' : 'Iniciar sesión'}
             </button>
           </form>
         </div>

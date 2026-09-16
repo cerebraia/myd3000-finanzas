@@ -8,4 +8,12 @@ export default defineConfig({
       '@': '/src',
     },
   },
+  preview: {
+    // SPA fallback: all routes serve index.html
+    port: 4173,
+  },
+  build: {
+    // Suppress the 500KB warning since we already use lazy routes
+    chunkSizeWarningLimit: 600,
+  },
 })

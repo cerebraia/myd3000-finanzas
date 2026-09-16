@@ -1,27 +1,24 @@
-/** @type {import('tailwindcss').Config} */
 export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       colors: {
-        brand: {
-          50:  '#eff6ff',
-          100: '#dbeafe',
-          200: '#bfdbfe',
-          300: '#93c5fd',
-          400: '#60a5fa',
-          500: '#3b82f6',
-          600: '#1d4ed8',
-          700: '#1e3a8a',
-          800: '#1e2f6e',
-          900: '#0f1f4d',
+        myd: {
+          navy: '#0f2040',
+          blue: '#1a3a6b',
+          'blue-hover': '#152f5a',
+          bg: '#f4f6f9',
+          surface: '#ffffff',
+          border: '#e2e6ed',
+          text: '#1a2332',
+          muted: '#6b7a90',
+          success: '#16a34a',
+          warning: '#d97706',
+          danger: '#dc2626',
         },
       },
       fontFamily: {
-        sans: ['Helvetica Neue', 'Helvetica', 'Arial', 'sans-serif'],
+        sans: ['Helvetica', 'Arial', 'sans-serif'],
       },
     },
   },

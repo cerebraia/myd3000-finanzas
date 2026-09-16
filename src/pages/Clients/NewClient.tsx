@@ -1,67 +1,95 @@
-import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
 import { createClient } from '@/services/clients'
+import { clientsKeys } from '@/lib/queryKeys'
+import { useToast } from '@/contexts/ToastContext'
+import { Modal } from '@/components/ui/Modal'
+import type { Client } from '@/types'
 
 const schema = z.object({
-  name: z.string().min(2, 'Mínimo 2 caracteres'),
-  email: z.string().email('Correo inválido').or(z.literal('')),
-  phone: z.string().or(z.literal('')),
-  address: z.string().or(z.literal('')),
-  notes: z.string().or(z.literal('')),
+  full_name:       z.string().min(2, 'Mínimo 2 caracteres').max(150),
+  document_type:   z.string().max(20).optional(),
+  document_number: z.string().max(30).optional(),
+  phone:           z.string().max(30).optional(),
+  email:           z.union([z.string().email('Correo inválido').max(254), z.literal('')]).optional(),
+  address:         z.string().max(300).optional(),
+  notes:           z.string().max(2000).optional(),
 })
 
 type FormData = z.infer<typeof schema>
 
-function Field({
-  label,
-  error,
-  children,
-}: {
-  label: string
-  error?: string
-  children: React.ReactNode
-}) {
+const inputCls =
+  'w-full px-3 py-2.5 border border-[var(--myd-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--myd-blue)] focus:border-transparent transition bg-white'
+
+function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <label className="block text-sm font-medium text-[var(--myd-text)] mb-1">{label}</label>
       {children}
       {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
     </div>
   )
 }
 
-const inputCls =
-  'w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent transition'
+interface NewClientModalProps {
+  open: boolean
+  onClose: () => void
+  onCreated: (client: Client) => void
+}
 
-export default function NewClient() {
-  const navigate = useNavigate()
+export function NewClientModal({ open, onClose, onCreated }: NewClientModalProps) {
   const qc = useQueryClient()
+  const toast = useToast()
 
   const {
     register,
     handleSubmit,
+    reset,
     formState: { errors, isSubmitting },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', email: '', phone: '', address: '', notes: '' },
+    defaultValues: {
+      full_name: '',
+      document_type: '',
+      document_number: '',
+      phone: '',
+      email: '',
+      address: '',
+      notes: '',
+    },
   })
 
   const mutation = useMutation({
     mutationFn: (data: FormData) =>
       createClient({
-        name: data.name,
-        email: data.email || null,
+        full_name: data.full_name,
+        document_type: data.document_type || null,
+        document_number: data.document_number || null,
         phone: data.phone || null,
+        email: data.email || null,
         address: data.address || null,
         notes: data.notes || null,
       }),
-    onSuccess: client => {
-      qc.invalidateQueries({ queryKey: ['clients'] })
-      navigate(`/clientes/${client.id}`)
+    onSuccess: (client) => {
+      qc.invalidateQueries({ queryKey: clientsKeys.all })
+      toast.success('Cliente creado.')
+      reset()
+      onCreated(client)
+    },
+    onError: (err: Error) => {
+      if (err.message === 'duplicate') {
+        toast.error('Ya existe un cliente con ese número de documento.')
+      } else if (err.message === 'table_missing') {
+        toast.error('La base de datos no está configurada. Ejecuta las migraciones.')
+      } else if (err.message === 'not_null') {
+        toast.error('Falta información requerida. Verifica los campos obligatorios.')
+      } else if (err.message === 'rls_denied') {
+        toast.error('No tienes permisos para crear clientes.')
+      } else {
+        toast.error('No pudimos guardar el cliente. Intenta nuevamente.')
+      }
     },
   })
 
@@ -69,72 +97,100 @@ export default function NewClient() {
     await mutation.mutateAsync(data)
   }
 
+  function handleClose() {
+    reset()
+    onClose()
+  }
+
   return (
-    <div className="max-w-xl mx-auto">
-      <button
-        onClick={() => navigate('/clientes')}
-        className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-5"
-      >
-        <ArrowLeft size={16} />
-        Volver a clientes
-      </button>
+    <Modal open={open} onClose={handleClose} title="Nuevo cliente" size="md">
+      <form onSubmit={handleSubmit(onSubmit)} className="px-6 py-5 space-y-4">
+        <Field label="Nombre *" error={errors.full_name?.message}>
+          <input
+            {...register('full_name')}
+            className={inputCls}
+            placeholder="Nombre completo o empresa"
+            autoFocus
+          />
+        </Field>
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-800">Nuevo cliente</h2>
-        </div>
-
-        <form onSubmit={handleSubmit(onSubmit)} className="px-6 py-5 space-y-4">
-          <Field label="Nombre *" error={errors.name?.message}>
-            <input {...register('name')} className={inputCls} placeholder="Nombre completo o empresa" />
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Tipo de documento" error={errors.document_type?.message}>
+            <select {...register('document_type')} className={inputCls}>
+              <option value="">Seleccionar...</option>
+              <option value="CI">Cédula (CI)</option>
+              <option value="RIF">RIF</option>
+              <option value="Pasaporte">Pasaporte</option>
+              <option value="Otro">Otro</option>
+            </select>
           </Field>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="Correo electrónico" error={errors.email?.message}>
-              <input {...register('email')} type="email" className={inputCls} placeholder="correo@ejemplo.com" />
-            </Field>
-            <Field label="Teléfono" error={errors.phone?.message}>
-              <input {...register('phone')} className={inputCls} placeholder="+58 412 000 0000" />
-            </Field>
-          </div>
-
-          <Field label="Dirección" error={errors.address?.message}>
-            <input {...register('address')} className={inputCls} placeholder="Ciudad, urbanización, calle..." />
-          </Field>
-
-          <Field label="Notas internas" error={errors.notes?.message}>
-            <textarea
-              {...register('notes')}
-              rows={3}
+          <Field label="Número de documento" error={errors.document_number?.message}>
+            <input
+              {...register('document_number')}
               className={inputCls}
-              placeholder="Observaciones, referencias, preferencias del cliente..."
+              placeholder="V-12345678"
             />
           </Field>
+        </div>
 
-          {mutation.isError && (
-            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-              <p className="text-sm text-red-600">Error al guardar. Intenta de nuevo.</p>
-            </div>
-          )}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Teléfono" error={errors.phone?.message}>
+            <input
+              {...register('phone')}
+              className={inputCls}
+              placeholder="+58 412 000 0000"
+            />
+          </Field>
+          <Field label="Correo" error={errors.email?.message}>
+            <input
+              {...register('email')}
+              type="email"
+              className={inputCls}
+              placeholder="correo@ejemplo.com"
+            />
+          </Field>
+        </div>
 
-          <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => navigate('/clientes')}
-              className="flex-1 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="flex-1 py-2.5 bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white rounded-lg text-sm font-medium transition-colors"
-            >
-              {isSubmitting ? 'Guardando...' : 'Guardar cliente'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <Field label="Dirección" error={errors.address?.message}>
+          <input
+            {...register('address')}
+            className={inputCls}
+            placeholder="Ciudad, urbanización, calle..."
+          />
+        </Field>
+
+        <Field label="Notas internas" error={errors.notes?.message}>
+          <textarea
+            {...register('notes')}
+            rows={2}
+            className={inputCls}
+            placeholder="Observaciones, referencias..."
+          />
+        </Field>
+
+        <div className="flex gap-3 pt-2">
+          <button
+            type="button"
+            onClick={handleClose}
+            className="flex-1 py-2.5 border border-gray-300 rounded-lg text-sm text-[var(--myd-muted)] hover:bg-gray-50 transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="flex-1 py-2.5 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
+            style={{ backgroundColor: 'var(--myd-blue)' }}
+          >
+            {isSubmitting ? 'Guardando...' : 'Guardar cliente'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   )
+}
+
+// Default export for route /clientes/nuevo (legacy, kept for compat)
+export default function NewClientPage() {
+  return null
 }

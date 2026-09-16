@@ -1,38 +1,113 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { Plus, Users, Search, Phone, Mail } from 'lucide-react'
-import { getClients } from '@/services/clients'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Plus, Users, Search, Archive, RotateCcw } from 'lucide-react'
+import { getClients, archiveClient, restoreClient } from '@/services/clients'
+import { clientsKeys } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { ConfirmModal } from '@/components/ui/ConfirmModal'
+import { NewClientModal } from './NewClient'
+import { formatClientNumber, formatDate } from '@/utils/formatters'
+import { useToast } from '@/contexts/ToastContext'
+import { usePermissions } from '@/hooks/usePermissions'
+import type { Client } from '@/types'
+
+function SkeletonRow() {
+  return (
+    <tr className="border-b border-gray-100 animate-pulse">
+      <td className="px-5 py-3.5"><div className="h-4 bg-gray-200 rounded w-32" /></td>
+      <td className="px-4 py-3.5"><div className="h-4 bg-gray-200 rounded w-24" /></td>
+      <td className="px-4 py-3.5"><div className="h-4 bg-gray-200 rounded w-28" /></td>
+      <td className="px-4 py-3.5"><div className="h-4 bg-gray-200 rounded w-32" /></td>
+      <td className="px-4 py-3.5"><div className="h-4 bg-gray-200 rounded w-20" /></td>
+      <td className="px-5 py-3.5"><div className="h-4 bg-gray-200 rounded w-12" /></td>
+    </tr>
+  )
+}
 
 export default function Clients() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
+  const toast = useToast()
+  const { can } = usePermissions()
   const [search, setSearch] = useState('')
+  const [showNew, setShowNew] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
+  const [archiveTarget, setArchiveTarget] = useState<Client | null>(null)
+  const [restoreTarget, setRestoreTarget] = useState<Client | null>(null)
 
   const { data: clients = [], isLoading } = useQuery({
-    queryKey: ['clients'],
-    queryFn: getClients,
+    queryKey: [...clientsKeys.all, showArchived],
+    queryFn: () => getClients(showArchived),
   })
 
-  const filtered = clients.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    (c.email ?? '').toLowerCase().includes(search.toLowerCase())
-  )
+  const archiveMutation = useMutation({
+    mutationFn: (id: string) => archiveClient(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: clientsKeys.all })
+      setArchiveTarget(null)
+      toast.success('Cliente archivado.')
+    },
+    onError: () => toast.error('No se pudo archivar el cliente.'),
+  })
+
+  const restoreMutation = useMutation({
+    mutationFn: (id: string) => restoreClient(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: clientsKeys.all })
+      setRestoreTarget(null)
+      toast.success('Cliente restaurado.')
+    },
+    onError: () => toast.error('No se pudo restaurar el cliente.'),
+  })
+
+  const filtered = clients.filter((c: Client) => {
+    const q = search.toLowerCase()
+    return (
+      (c.full_name ?? '').toLowerCase().includes(q) ||
+      (c.document_number ?? '').toLowerCase().includes(q) ||
+      (c.phone ?? '').toLowerCase().includes(q) ||
+      (c.email ?? '').toLowerCase().includes(q)
+    )
+  })
+
+  function handleCreated(client: Client) {
+    setShowNew(false)
+    navigate(`/clientes/${client.id}`)
+  }
+
+  const canArchive = can('clients.archive')
 
   return (
     <div className="max-w-5xl mx-auto">
       <PageHeader
         title="Clientes"
-        description={`${clients.length} cliente${clients.length !== 1 ? 's' : ''} registrado${clients.length !== 1 ? 's' : ''}`}
+        description={`${clients.length} cliente${clients.length !== 1 ? 's' : ''} ${showArchived ? 'archivado' : 'registrado'}${clients.length !== 1 ? 's' : ''}`}
         action={
-          <button
-            onClick={() => navigate('/clientes/nuevo')}
-            className="flex items-center gap-2 bg-blue-700 hover:bg-blue-800 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
-          >
-            <Plus size={16} />
-            Nuevo cliente
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowArchived(v => !v)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                showArchived
+                  ? 'border-amber-300 bg-amber-50 text-amber-700'
+                  : 'border-gray-200 text-[var(--myd-muted)] hover:bg-gray-50'
+              }`}
+            >
+              <Archive size={14} />
+              {showArchived ? 'Ver activos' : 'Ver archivados'}
+            </button>
+            {!showArchived && (
+              <button
+                onClick={() => setShowNew(true)}
+                className="flex items-center gap-2 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+                style={{ backgroundColor: 'var(--myd-blue)' }}
+              >
+                <Plus size={16} />
+                Nuevo cliente
+              </button>
+            )}
+          </div>
         }
       />
 
@@ -41,28 +116,46 @@ export default function Clients() {
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
         <input
           type="text"
-          placeholder="Buscar por nombre o correo..."
+          placeholder="Buscar por nombre, documento, teléfono o correo..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
+          className="w-full pl-9 pr-4 py-2.5 border border-[var(--myd-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--myd-blue)] focus:border-transparent bg-white"
         />
       </div>
 
+      {showArchived && (
+        <div className="mb-4 flex items-center gap-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+          <Archive size={14} />
+          Mostrando clientes archivados. Usa "Restaurar" para reactivar un cliente.
+        </div>
+      )}
+
       {isLoading ? (
-        <div className="flex justify-center py-16">
-          <div className="w-6 h-6 border-2 border-blue-700 border-t-transparent rounded-full animate-spin" />
+        <div className="bg-white rounded-xl border border-[var(--myd-border)] shadow-sm overflow-hidden">
+          <table className="w-full text-sm">
+            <tbody>
+              {Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)}
+            </tbody>
+          </table>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="bg-white rounded-xl border border-[var(--myd-border)] shadow-sm">
           <EmptyState
             icon={Users}
-            title={search ? 'Sin resultados' : 'No hay clientes aún'}
-            description={search ? 'Intenta con otro término de búsqueda.' : 'Crea el primer cliente para comenzar.'}
+            title={search ? 'Sin resultados' : showArchived ? 'Sin clientes archivados' : 'No hay clientes aún'}
+            description={
+              search
+                ? 'Intenta con otro término de búsqueda.'
+                : showArchived
+                ? 'No hay clientes archivados.'
+                : 'Crea el primer cliente para comenzar.'
+            }
             action={
-              !search ? (
+              !search && !showArchived ? (
                 <button
-                  onClick={() => navigate('/clientes/nuevo')}
-                  className="flex items-center gap-2 bg-blue-700 hover:bg-blue-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                  onClick={() => setShowNew(true)}
+                  className="flex items-center gap-2 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                  style={{ backgroundColor: 'var(--myd-blue)' }}
                 >
                   <Plus size={15} />
                   Crear cliente
@@ -72,29 +165,68 @@ export default function Clients() {
           />
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-white rounded-xl border border-[var(--myd-border)] shadow-sm overflow-hidden">
           {/* Desktop table */}
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Nombre</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Correo</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Teléfono</th>
-                  <th className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Dirección</th>
+                  <th className="text-left px-5 py-3 text-xs font-medium text-[var(--myd-muted)] uppercase tracking-wide">Cliente</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-[var(--myd-muted)] uppercase tracking-wide">Documento</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-[var(--myd-muted)] uppercase tracking-wide">Teléfono</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-[var(--myd-muted)] uppercase tracking-wide">Correo</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-[var(--myd-muted)] uppercase tracking-wide">Registro</th>
+                  <th className="text-left px-5 py-3 text-xs font-medium text-[var(--myd-muted)] uppercase tracking-wide">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(client => (
+                {filtered.map((client: Client) => (
                   <tr
                     key={client.id}
-                    onClick={() => navigate(`/clientes/${client.id}`)}
-                    className="border-b border-gray-100 last:border-0 hover:bg-gray-50 cursor-pointer transition-colors"
+                    className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors ${client.archived_at ? 'opacity-60' : ''}`}
                   >
-                    <td className="px-5 py-3.5 font-medium text-gray-800">{client.name}</td>
-                    <td className="px-4 py-3.5 text-gray-500">{client.email ?? '—'}</td>
-                    <td className="px-4 py-3.5 text-gray-500">{client.phone ?? '—'}</td>
-                    <td className="px-5 py-3.5 text-gray-500 truncate max-w-xs">{client.address ?? '—'}</td>
+                    <td className="px-5 py-3.5">
+                      <p className="font-medium text-[var(--myd-text)]">{client.full_name}</p>
+                      <p className="text-xs text-[var(--myd-muted)]">{formatClientNumber(client.client_number)}</p>
+                    </td>
+                    <td className="px-4 py-3.5 text-[var(--myd-muted)]">
+                      {client.document_type && client.document_number
+                        ? `${client.document_type}: ${client.document_number}`
+                        : '—'}
+                    </td>
+                    <td className="px-4 py-3.5 text-[var(--myd-muted)]">{client.phone ?? '—'}</td>
+                    <td className="px-4 py-3.5 text-[var(--myd-muted)]">{client.email ?? '—'}</td>
+                    <td className="px-4 py-3.5 text-xs text-[var(--myd-muted)]">{formatDate(client.created_at)}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-3">
+                        {!showArchived && (
+                          <button
+                            onClick={() => navigate(`/clientes/${client.id}`)}
+                            className="text-xs font-medium text-blue-700 hover:text-blue-800"
+                          >
+                            Ver
+                          </button>
+                        )}
+                        {canArchive && showArchived && (
+                          <button
+                            onClick={() => setRestoreTarget(client)}
+                            className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700"
+                          >
+                            <RotateCcw size={12} />
+                            Restaurar
+                          </button>
+                        )}
+                        {canArchive && !showArchived && (
+                          <button
+                            onClick={() => setArchiveTarget(client)}
+                            className="text-xs text-[var(--myd-muted)] hover:text-red-500 transition-colors"
+                            title="Archivar cliente"
+                          >
+                            <Archive size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -103,30 +235,69 @@ export default function Clients() {
 
           {/* Mobile cards */}
           <div className="md:hidden divide-y divide-gray-100">
-            {filtered.map(client => (
-              <div
-                key={client.id}
-                onClick={() => navigate(`/clientes/${client.id}`)}
-                className="px-5 py-4 cursor-pointer active:bg-gray-50"
-              >
-                <p className="text-sm font-medium text-gray-800">{client.name}</p>
-                <div className="flex flex-col gap-1 mt-1.5">
-                  {client.email && (
-                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                      <Mail size={12} /> {client.email}
-                    </div>
+            {filtered.map((client: Client) => (
+              <div key={client.id} className="px-5 py-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div
+                    onClick={() => !showArchived && navigate(`/clientes/${client.id}`)}
+                    className={!showArchived ? 'cursor-pointer flex-1' : 'flex-1'}
+                  >
+                    <p className="text-sm font-medium text-[var(--myd-text)]">{client.full_name}</p>
+                    <p className="text-xs text-[var(--myd-muted)] mt-0.5">{formatClientNumber(client.client_number)}</p>
+                  </div>
+                  {canArchive && showArchived && (
+                    <button onClick={() => setRestoreTarget(client)}
+                      className="flex items-center gap-1 text-xs font-medium text-emerald-600">
+                      <RotateCcw size={12} />Restaurar
+                    </button>
                   )}
-                  {client.phone && (
-                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                      <Phone size={12} /> {client.phone}
-                    </div>
+                  {canArchive && !showArchived && (
+                    <button onClick={() => setArchiveTarget(client)}
+                      className="text-[var(--myd-muted)] hover:text-red-500">
+                      <Archive size={14} />
+                    </button>
                   )}
+                </div>
+                <div className="flex gap-4 mt-2">
+                  {client.phone && <p className="text-xs text-[var(--myd-muted)]">{client.phone}</p>}
+                  {client.email && <p className="text-xs text-[var(--myd-muted)]">{client.email}</p>}
                 </div>
               </div>
             ))}
           </div>
         </div>
       )}
+
+      <NewClientModal
+        open={showNew}
+        onClose={() => setShowNew(false)}
+        onCreated={handleCreated}
+      />
+
+      {/* Archive modal */}
+      <ConfirmModal
+        open={!!archiveTarget}
+        onClose={() => setArchiveTarget(null)}
+        onConfirm={() => archiveTarget && archiveMutation.mutate(archiveTarget.id)}
+        title="¿Archivar este cliente?"
+        description={archiveTarget?.full_name}
+        impact="El cliente dejará de aparecer en las vistas principales. Su historial de cotizaciones, proyectos y pagos se conservará. Puede restaurarlo en cualquier momento."
+        confirmLabel="Archivar"
+        variant="warning"
+        isPending={archiveMutation.isPending}
+      />
+
+      {/* Restore modal */}
+      <ConfirmModal
+        open={!!restoreTarget}
+        onClose={() => setRestoreTarget(null)}
+        onConfirm={() => restoreTarget && restoreMutation.mutate(restoreTarget.id)}
+        title="¿Restaurar este cliente?"
+        description={`${restoreTarget?.full_name} volverá a aparecer en las vistas activas.`}
+        confirmLabel="Restaurar"
+        variant="default"
+        isPending={restoreMutation.isPending}
+      />
     </div>
   )
 }
