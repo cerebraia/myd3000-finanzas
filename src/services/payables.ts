@@ -105,12 +105,12 @@ export async function registerPayablePayment(params: {
   notes: string | null
 }): Promise<{ newStatus: string; remaining: number }> {
   const { data, error } = await supabase.rpc('register_payable_payment', {
-    p_payable_id:   params.payableId,
-    p_amount:       params.amount,
-    p_payment_date: params.paymentDate,
-    p_method:       params.method,
-    p_reference:    params.reference,
-    p_notes:        params.notes,
+    p_payable_id:     params.payableId,
+    p_amount:         params.amount,
+    p_payment_date:   params.paymentDate,
+    p_payment_method: params.method,
+    p_reference:      params.reference,
+    p_notes:          params.notes,
   })
 
   if (error) throw error

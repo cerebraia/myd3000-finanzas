@@ -1,10 +1,12 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const ALLOWED_ORIGINS = [
-  'https://myd3000.up.railway.app',
+  'https://myd3000-finanzas-production.up.railway.app',
   'http://localhost:5173',
   'http://localhost:4173',
 ]
+
+const DEFAULT_REDIRECT = 'https://myd3000-finanzas-production.up.railway.app'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -73,8 +75,13 @@ Deno.serve(async (req: Request) => {
     }
 
     // Parse body
-    const body = await req.json() as { email?: string; full_name?: string; role?: string; position?: string }
-    const { email, full_name, role = 'operations', position } = body
+    const body = await req.json() as { email?: string; full_name?: string; role?: string; position?: string; redirectTo?: string }
+    const { email, full_name, role = 'operations', position, redirectTo } = body
+
+    // Validate redirectTo against allowed origins (or use default)
+    const safeRedirect = redirectTo && ALLOWED_ORIGINS.some(o => redirectTo.startsWith(o))
+      ? redirectTo
+      : DEFAULT_REDIRECT
 
     if (!email || !full_name) {
       return new Response(JSON.stringify({ error: 'email y full_name son requeridos' }), {
@@ -94,9 +101,10 @@ Deno.serve(async (req: Request) => {
       auth: { autoRefreshToken: false, persistSession: false },
     })
 
-    // Invite via email (sends magic link to set password)
+    // Invite via email — redirectTo ensures link points to the correct app
     const { data: inviteData, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(email, {
       data: { full_name, role },
+      redirectTo: safeRedirect,
     })
 
     if (inviteError) {

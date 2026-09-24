@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, FileText, Search, Archive, RotateCcw, Printer } from 'lucide-react'
-import { getQuotes, archiveQuote, restoreQuote } from '@/services/quotes'
+import { Plus, FileText, Search, Archive, RotateCcw, Printer, Trash2 } from 'lucide-react'
+import { getQuotes, archiveQuote, restoreQuote, deleteQuote } from '@/services/quotes'
 import { quotesKeys } from '@/lib/queryKeys'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
@@ -60,6 +60,7 @@ export default function Quotes() {
   const [showArchived, setShowArchived] = useState(false)
   const [archiveTarget, setArchiveTarget] = useState<Quote | null>(null)
   const [restoreTarget, setRestoreTarget] = useState<Quote | null>(null)
+  const [deleteTarget,  setDeleteTarget]  = useState<Quote | null>(null)
 
   const { data: quotes = [], isLoading } = useQuery({
     queryKey: [...quotesKeys.all, showArchived],
@@ -84,6 +85,21 @@ export default function Quotes() {
       toast.success('Cotización restaurada.')
     },
     onError: () => toast.error('No se pudo restaurar la cotización.'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteQuote(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: quotesKeys.all })
+      setDeleteTarget(null)
+      toast.success('Cotización eliminada.')
+    },
+    onError: (err: Error) => {
+      setDeleteTarget(null)
+      if (err.message.includes('proyecto asociado')) toast.error('No se puede eliminar: tiene un proyecto asociado.')
+      else if (err.message.includes('estado')) toast.error('Solo se pueden eliminar cotizaciones en borrador o no aprobadas.')
+      else toast.error('No se pudo eliminar la cotización.')
+    },
   })
 
   const canArchive = can('quotes.archive')
@@ -299,8 +315,15 @@ export default function Quotes() {
                               title="Imprimir / PDF">
                               <Printer size={13} />
                             </button>
+                            {(q.status === 'draft' || q.status === 'rejected') && (
+                              <button onClick={e => { e.stopPropagation(); setDeleteTarget(q) }}
+                                className="text-[var(--myd-muted)] hover:text-red-600 transition-colors p-1"
+                                title="Eliminar">
+                                <Trash2 size={13} />
+                              </button>
+                            )}
                             <button onClick={e => { e.stopPropagation(); setArchiveTarget(q) }}
-                              className="text-[var(--myd-muted)] hover:text-red-500 transition-colors p-1"
+                              className="text-[var(--myd-muted)] hover:text-amber-500 transition-colors p-1"
                               title="Archivar">
                               <Archive size={13} />
                             </button>
@@ -365,6 +388,18 @@ export default function Quotes() {
         confirmLabel="Restaurar"
         variant="default"
         isPending={restoreMutation.isPending}
+      />
+
+      <ConfirmModal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+        title="Eliminar cotización"
+        description={deleteTarget ? formatQuoteNumber(deleteTarget.quote_number, new Date(deleteTarget.issue_date).getFullYear()) : ''}
+        impact="Se eliminarán permanentemente la cotización, sus partidas y condiciones de pago. Esta acción no puede deshacerse."
+        confirmLabel="Eliminar permanentemente"
+        variant="danger"
+        isPending={deleteMutation.isPending}
       />
     </div>
   )

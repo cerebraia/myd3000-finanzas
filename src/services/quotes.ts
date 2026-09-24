@@ -224,4 +224,9 @@ export async function duplicateQuote(id: string): Promise<string> {
   return data as string
 }
 
+export async function deleteQuote(id: string): Promise<void> {
+  const { error } = await supabase.rpc('delete_quote_if_clean', { p_quote_id: id })
+  if (error) throw error
+}
+
 export { formatQuoteNumber }

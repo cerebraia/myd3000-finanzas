@@ -1,14 +1,15 @@
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownCircle, Search, Plus } from 'lucide-react'
+import { ArrowDownCircle, Search, Plus, XCircle } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { registerPayment, createReceivableManual } from '@/services/receivables'
+import { registerPayment, createReceivableManual, cancelReceivable } from '@/services/receivables'
 import { getClients } from '@/services/clients'
 import { receivablesKeys, projectsKeys, dashboardKeys, clientsKeys } from '@/lib/queryKeys'
 import { useToast } from '@/contexts/ToastContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { Modal } from '@/components/ui/Modal'
+import { ConfirmModal } from '@/components/ui/ConfirmModal'
 import { formatCurrency, formatDate, formatProjectNumber } from '@/utils/formatters'
 import type { Receivable } from '@/types'
 
@@ -61,6 +62,7 @@ export default function Receivables() {
   const [payMethod, setPayMethod] = useState(PAYMENT_METHODS[0])
   const [payRef, setPayRef] = useState('')
   const [payError, setPayError] = useState('')
+  const [cancelTarget, setCancelTarget] = useState<ReceivableWithProject | null>(null)
 
   const { data: receivables = [], isLoading } = useQuery({
     queryKey: receivablesKeys.byProject('all'),
@@ -89,6 +91,21 @@ export default function Receivables() {
       setNewClientId(''); setNewConcept(''); setNewAmount(''); setNewDueDate(''); setNewNotes('')
     },
     onError: () => toast.error('No se pudo crear la cuenta por cobrar.'),
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: (id: string) => cancelReceivable(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: receivablesKeys.byProject('all') })
+      qc.invalidateQueries({ queryKey: dashboardKeys.stats })
+      toast.success('Cuenta cancelada.')
+      setCancelTarget(null)
+    },
+    onError: (err: Error) => {
+      if (err.message.includes('pagos')) toast.error('No se puede cancelar: tiene pagos registrados.')
+      else toast.error('No se pudo cancelar la cuenta.')
+      setCancelTarget(null)
+    },
   })
 
   const payMutation = useMutation({
@@ -245,6 +262,13 @@ export default function Receivables() {
                                 Registrar
                               </button>
                             )}
+                            {r.status === 'pending' && r.paid_amount === 0 && (
+                              <button onClick={() => setCancelTarget(r)}
+                                className="text-gray-400 hover:text-red-500 transition-colors"
+                                title="Cancelar cuenta">
+                                <XCircle size={13} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -310,6 +334,18 @@ export default function Receivables() {
           </div>
         )}
       </Modal>
+
+      <ConfirmModal
+        open={!!cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        onConfirm={() => cancelMutation.mutate(cancelTarget!.id)}
+        title="Cancelar cuenta por cobrar"
+        description={cancelTarget?.concept ?? ''}
+        impact="La cuenta quedará cancelada. Solo es posible si no tiene pagos registrados."
+        confirmLabel="Cancelar cuenta"
+        variant="danger"
+        isPending={cancelMutation.isPending}
+      />
 
       {/* Create Manual Receivable Modal */}
       <Modal open={newOpen} onClose={() => setNewOpen(false)} title="Nueva cuenta por cobrar" size="sm">

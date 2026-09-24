@@ -1,9 +1,21 @@
 import { supabase } from '@/lib/supabase'
 import type { UserListItem, UserRole } from '@/types'
 
+function isRpcMissing(error: { code?: string; message?: string }): boolean {
+  return (
+    error.code === 'PGRST202' ||
+    error.code === '42883' ||
+    (error.message ?? '').includes('Could not find the function') ||
+    (error.message ?? '').includes('does not exist')
+  )
+}
+
 export async function getUserList(): Promise<UserListItem[]> {
   const { data, error } = await supabase.rpc('get_user_list')
-  if (error) throw error
+  if (error) {
+    if (isRpcMissing(error)) return []
+    throw error
+  }
   return (data ?? []) as UserListItem[]
 }
 
@@ -47,7 +59,7 @@ export async function inviteUser(data: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${session.access_token}`,
     },
-    body: JSON.stringify(data),
+    body: JSON.stringify({ ...data, redirectTo: window.location.origin }),
   })
 
   if (!res.ok) {
