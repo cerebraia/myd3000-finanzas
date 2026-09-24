@@ -10,6 +10,7 @@ import { useToast } from '@/contexts/ToastContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { Modal } from '@/components/ui/Modal'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
+import { getDiagnosticMessage } from '@/utils/errors'
 import { formatCurrency, formatDate, formatProjectNumber } from '@/utils/formatters'
 import type { Receivable } from '@/types'
 
@@ -90,7 +91,7 @@ export default function Receivables() {
       setNewOpen(false)
       setNewClientId(''); setNewConcept(''); setNewAmount(''); setNewDueDate(''); setNewNotes('')
     },
-    onError: () => toast.error('No se pudo crear la cuenta por cobrar.'),
+    onError: (err: Error) => toast.error(getDiagnosticMessage(err, 'No se pudo crear la cuenta por cobrar.')),
   })
 
   const cancelMutation = useMutation({

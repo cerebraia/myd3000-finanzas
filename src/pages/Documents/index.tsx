@@ -2,6 +2,7 @@ import { useRef, useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Archive, Search, AlertTriangle, X, RotateCcw, Edit } from 'lucide-react'
 import { getDocuments, uploadDocument, updateDocument, softDeleteDocument, restoreDocument, documentExpiryStatus } from '@/services/documents'
+import { getDiagnosticMessage } from '@/utils/errors'
 import { getDocumentCategories } from '@/services/categories'
 import { documentsKeys, categoriesKeys } from '@/lib/queryKeys'
 import { useToast } from '@/contexts/ToastContext'
@@ -75,9 +76,9 @@ export default function Documents() {
     },
     onError: (err: Error) => {
       if (err.message.includes('bucket') || err.message.includes('Bucket')) {
-        toast.error('El bucket de archivos no está configurado en Supabase Storage.')
+        toast.error('El bucket admin-files no está configurado en Supabase Storage.')
       } else {
-        toast.error('No se pudo guardar el documento.')
+        toast.error(getDiagnosticMessage(err, 'No se pudo guardar el documento.'))
       }
     },
   })

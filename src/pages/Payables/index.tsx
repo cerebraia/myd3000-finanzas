@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, ArrowUpCircle, Search, AlertTriangle } from 'lucide-react'
+import { getDiagnosticMessage } from '@/utils/errors'
 import { getPayables, createPayable, isPayableOverdue } from '@/services/payables'
 import { getExpenseCategories } from '@/services/categories'
 import { getManagedEntities } from '@/services/managedEntities'
@@ -80,7 +81,7 @@ export default function Payables() {
       setNewOpen(false)
       setConcept(''); setCategoryId(''); setBeneficiaryName(''); setManagedEntityId(''); setAmount(''); setDueDate(''); setPriority('normal'); setNotes('')
     },
-    onError: () => toast.error('No se pudo crear la cuenta por pagar.'),
+    onError: (err: Error) => toast.error(getDiagnosticMessage(err, 'No se pudo crear la cuenta por pagar.')),
   })
 
   const filtered = useMemo(() => {

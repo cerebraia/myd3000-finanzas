@@ -68,3 +68,31 @@ export function mapSupabaseError(err: unknown): AppError {
 export function getErrorMessage(err: unknown): string {
   return mapSupabaseError(err).message
 }
+
+// Returns a user-visible message that includes the Supabase error code
+// when available — useful for diagnosing GRANT / RLS / constraint failures.
+// Safe: never exposes credentials or internal stack traces.
+export function getDiagnosticMessage(err: unknown, fallback: string): string {
+  const e = err as { code?: string; message?: string; hint?: string } | null
+  if (!e) return fallback
+
+  if (e.code === '42501') {
+    return `Permiso denegado (42501). Ejecuta MYD3000_CRUD_CREATE_FIX.sql en Supabase SQL Editor.`
+  }
+  if (e.code === '23502') {
+    return `Campo requerido faltante (23502): ${e.message ?? fallback}`
+  }
+  if (e.code === '23505') {
+    return `Registro duplicado (23505): ${e.hint ?? e.message ?? fallback}`
+  }
+  if (e.code === '23503') {
+    return `Referencia inválida (23503): ${e.hint ?? e.message ?? fallback}`
+  }
+  if (e.code === '42P01') {
+    return `Tabla no encontrada (42P01). Ejecuta MYD3000_CRUD_COMPLETION.sql en Supabase SQL Editor.`
+  }
+  if (e.message) {
+    return `${fallback} — ${e.code ? `[${e.code}] ` : ''}${e.message}`
+  }
+  return fallback
+}

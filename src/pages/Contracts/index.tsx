@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ScrollText, Search, Plus } from 'lucide-react'
 import { getContracts, createContractManual } from '@/services/contracts'
+import { getDiagnosticMessage } from '@/utils/errors'
 import { getClients } from '@/services/clients'
 import { contractsKeys, clientsKeys } from '@/lib/queryKeys'
 import { useToast } from '@/contexts/ToastContext'
@@ -92,7 +93,7 @@ export default function Contracts() {
       setNewClientId(''); setNewDate(''); setNewAmount(''); setNewNotes('')
       navigate(`/contratos/${contractId}`)
     },
-    onError: () => toast.error('No se pudo crear el contrato.'),
+    onError: (err: Error) => toast.error(getDiagnosticMessage(err, 'No se pudo crear el contrato.')),
   })
 
   const filtered = useMemo(() => {

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, UserCheck, Search, Archive, RotateCcw } from 'lucide-react'
 import { getEmployees, createEmployee, archiveEmployee, restoreEmployee } from '@/services/employees'
+import { getDiagnosticMessage } from '@/utils/errors'
 import { employeesKeys } from '@/lib/queryKeys'
 import { useToast } from '@/contexts/ToastContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -112,7 +113,7 @@ export default function Employees() {
       setEmail(''); setLocation(''); setEmpType('employee'); setPosition(''); setSpecialty(''); setHireDate(''); setNotes('')
       navigate(`/personal/${emp.id}`)
     },
-    onError: () => toast.error('No se pudo registrar el empleado.'),
+    onError: (err: Error) => toast.error(getDiagnosticMessage(err, 'No se pudo registrar el empleado.')),
   })
 
   const statusCounts = useMemo(() => ({

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, CheckCircle, X, Edit, ListTodo } from 'lucide-react'
 import { getTasks, createTask, completeTask, cancelTask, updateTask } from '@/services/tasks'
+import { getDiagnosticMessage } from '@/utils/errors'
 import { supabase } from '@/lib/supabase'
 import { tasksKeys, dashboardSummaryKeys } from '@/lib/queryKeys'
 import { useToast } from '@/contexts/ToastContext'
@@ -126,7 +127,7 @@ export default function TareasPage() {
       toast.success('Tarea creada.')
       setNewOpen(false); resetForm()
     },
-    onError: () => toast.error('No se pudo crear la tarea.'),
+    onError: (err: Error) => toast.error(getDiagnosticMessage(err, 'No se pudo crear la tarea.')),
   })
 
   const editMutation = useMutation({

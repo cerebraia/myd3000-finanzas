@@ -5,6 +5,7 @@ import {
   getObligations, createObligation, updateObligation, archiveObligation, restoreObligation,
   generatePayableFromObligation, getObligationNextDue, getPeriodKey,
 } from '@/services/obligations'
+import { getDiagnosticMessage } from '@/utils/errors'
 import { getExpenseCategories } from '@/services/categories'
 import { getManagedEntities } from '@/services/managedEntities'
 import { obligationsKeys, categoriesKeys, payablesKeys, dashboardKeys, managedEntitiesKeys } from '@/lib/queryKeys'
@@ -103,7 +104,7 @@ export default function Obligations() {
       setName(''); setCategoryId(''); setBeneficiaryName(''); setManagedEntityId(''); setAmount(''); setFrequency('monthly')
       setDayOfMonth('5'); setStartDate(new Date().toISOString().slice(0, 10)); setNotes('')
     },
-    onError: () => toast.error('No se pudo crear la obligación.'),
+    onError: (err: Error) => toast.error(getDiagnosticMessage(err, 'No se pudo crear la obligación.')),
   })
 
   function openEdit(obl: RecurringObligation) {

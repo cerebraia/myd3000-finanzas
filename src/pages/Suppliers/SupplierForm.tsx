@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { createSupplier, updateSupplier, formatSupplierNumber } from '@/services/suppliers'
+import { getDiagnosticMessage } from '@/utils/errors'
 import { suppliersKeys } from '@/lib/queryKeys'
 import { useToast } from '@/contexts/ToastContext'
 import type { Supplier } from '@/types'
@@ -65,7 +66,7 @@ export default function SupplierForm({ mode, initialData }: SupplierFormProps) {
       toast.success('Proveedor creado correctamente.')
       navigate('/proveedores')
     },
-    onError: () => toast.error('No se pudo crear el proveedor.'),
+    onError: (err: Error) => toast.error(getDiagnosticMessage(err, 'No se pudo crear el proveedor.')),
   })
 
   const updateMutation = useMutation({
