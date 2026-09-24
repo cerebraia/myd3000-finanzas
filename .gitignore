@@ -30,3 +30,4 @@ dist-ssr
 .env.test.local
 .env.production.local
 supabase/myd3000_setup_complete.sql
+supabase/.temp/

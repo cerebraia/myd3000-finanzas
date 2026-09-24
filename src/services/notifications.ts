@@ -1,6 +1,10 @@
 import { supabase } from '@/lib/supabase'
 import type { Notification } from '@/types'
 
+function isTableMissing(error: { code?: string; message?: string }): boolean {
+  return error.code === '42P01' || (error.message ?? '').includes('does not exist')
+}
+
 export async function getNotifications(limit = 30): Promise<Notification[]> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
@@ -31,7 +35,10 @@ export async function getNotifications(limit = 30): Promise<Notification[]> {
   }
 
   const { data, error } = await query
-  if (error) throw error
+  if (error) {
+    if (isTableMissing(error)) return []
+    throw error
+  }
   return (data ?? []) as Notification[]
 }
 
@@ -47,12 +54,16 @@ export async function getUnreadCount(): Promise<number> {
 
   const role = profile?.role ?? null
 
-  const { count } = await supabase
+  const { count, error } = await supabase
     .from('notifications')
     .select('id', { count: 'exact', head: true })
     .is('read_at', null)
     .or(`user_id.eq.${user.id}${role ? `,role_target.eq.${role}` : ''},and(user_id.is.null,role_target.is.null)`)
 
+  if (error) {
+    if (isTableMissing(error)) return 0
+    throw error
+  }
   return count ?? 0
 }
 

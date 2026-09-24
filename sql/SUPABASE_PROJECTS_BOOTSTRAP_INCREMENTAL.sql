@@ -1,27 +1,58 @@
 -- ================================================================
 -- MYD3000 — BOOTSTRAP INCREMENTAL DE PROYECTOS Y MÓDULOS
 -- ================================================================
--- Fecha: 2026-09-16
--- Tipo: INCREMENTAL — SIN DROP — SIN TRUNCATE — SIN DELETE
+-- Actualizado: 2026-09-23 (AJUSTE #007)
+-- Tipo: INCREMENTAL — SIN DROP TABLE — SIN TRUNCATE — SIN DELETE
 --
--- ESTADO REMOTO CONFIRMADO (antes de ejecutar este script):
+-- ESTADO REMOTO CONFIRMADO EN SUPABASE:
 --   EXISTS:   profiles, clients, quotes, quote_items,
 --             quote_payment_terms, activity_log
---             + RPCs de cotizaciones (create_quote_with_items, etc.)
+--             (RLS habilitado en todas)
+--   activity_log.entity_id: uuid (NOT text) — confirmado
+--
 --   MISSING:  projects, contracts, receivables, payments_received,
 --             project_designs, project_materials, suppliers,
---             employees, expense_categories, payables,
---             payments_made, recurring_obligations
+--             employees, expense_categories, payment_methods,
+--             payables, payments_made, recurring_obligations,
+--             managed_entities
 --
 -- PREREQUISITOS:
---   - set_updated_at() debe existir (usada por triggers existentes)
+--   - set_updated_at() debe existir (trigger de updated_at)
 --   - profiles, clients, quotes deben existir
+--   - Storage buckets 'admin-files' y 'project-files' crearlos manualmente
 --
 -- INSTRUCCIONES:
---   1. Abrir Supabase → SQL Editor → New Query
---   2. Pegar TODO este script
---   3. Run
---   4. Verificar resultados en la sección VERIFICACIÓN al final
+--   1. Ejecutar sql/MYD3000_PREFLIGHT_READONLY.sql primero (solo lectura)
+--   2. Abrir Supabase → SQL Editor → New Query
+--   3. Pegar TODO este script
+--   4. Run
+--   5. Verificar resultados en la sección VERIFICACIÓN al final
+--
+-- TABLAS QUE CREA (14):
+--   suppliers, projects, contracts, receivables, payments_received,
+--   project_designs, project_materials, expense_categories,
+--   payment_methods, managed_entities, recurring_obligations,
+--   payables, payments_made, employees
+--
+-- RPCs QUE CREA (28):
+--   is_admin, is_admin_or_administration, current_user_is_active,
+--   create_project_manual, update_project_fields, update_project_status,
+--   finalize_project, delete_project_if_clean, archive_project,
+--   restore_project, create_project_from_quote,
+--   update_contract_status, create_contract_manual, update_contract_fields,
+--   create_receivable_manual, update_receivable_fields, cancel_receivable,
+--   register_receivable_payment, void_received_payment,
+--   archive_supplier, restore_supplier, archive_employee, restore_employee,
+--   archive_obligation, restore_obligation,
+--   generate_payable_from_obligation, generate_due_recurring_obligations,
+--   run_obligations_job, register_payable_payment, void_made_payment,
+--   cancel_payable
+--
+-- TABLAS QUE MODIFICAN (ALTER ADD COLUMN IF NOT EXISTS):
+--   profiles (+ active), clients (+ archived_at/by),
+--   quotes (+ project_type, responsible_architect_*, archived_at/by,
+--             submitted_*, approved_by, rejected_by,
+--             company_signed_*, client_signed_*, client_signer_name)
 -- ================================================================
 
 BEGIN;
@@ -75,15 +106,19 @@ ALTER TABLE public.quotes
   ADD COLUMN IF NOT EXISTS submitted_by               uuid REFERENCES auth.users(id),
   ADD COLUMN IF NOT EXISTS submitted_at               timestamptz,
   ADD COLUMN IF NOT EXISTS approved_by                uuid REFERENCES auth.users(id),
+  ADD COLUMN IF NOT EXISTS approved_at                timestamptz,
   ADD COLUMN IF NOT EXISTS rejected_by                uuid REFERENCES auth.users(id),
+  ADD COLUMN IF NOT EXISTS rejected_at                timestamptz,
+  ADD COLUMN IF NOT EXISTS rejection_reason           text,
+  ADD COLUMN IF NOT EXISTS rejection_notes            text,
   ADD COLUMN IF NOT EXISTS company_signed_at          timestamptz,
   ADD COLUMN IF NOT EXISTS company_signed_by          uuid REFERENCES auth.users(id),
   ADD COLUMN IF NOT EXISTS client_signed_at           timestamptz,
   ADD COLUMN IF NOT EXISTS client_signer_name         text;
 
--- activity_log: entity_id como text (el frontend usa project_id::text)
--- Si ya existe como uuid, no cambiar — solo asegurar que NOT NULL no rompa.
--- No alterar columnas existentes.
+-- activity_log.entity_id: CONFIRMADO uuid en remoto.
+-- Todas las RPCs insertan valores uuid directamente (sin cast ::text).
+-- No alterar la columna.
 
 
 -- ================================================================
@@ -521,11 +556,45 @@ ON CONFLICT (name) DO NOTHING;
 
 
 -- ================================================================
+-- FASE 9B — MANAGED_ENTITIES
+-- (requerida antes de recurring_obligations y payables por FK)
+-- ================================================================
+
+CREATE TABLE IF NOT EXISTS public.managed_entities (
+  id          uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
+  name        text    NOT NULL,
+  entity_type text    NOT NULL DEFAULT 'company'
+              CHECK (entity_type IN ('person','company')),
+  active      boolean NOT NULL DEFAULT true,
+  notes       text,
+  sort_order  integer NOT NULL DEFAULT 0,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS managed_entities_active_idx      ON public.managed_entities (active);
+CREATE INDEX IF NOT EXISTS managed_entities_sort_order_idx  ON public.managed_entities (sort_order);
+
+ALTER TABLE public.managed_entities ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated users can read managed_entities"   ON public.managed_entities;
+CREATE POLICY "Authenticated users can read managed_entities"
+  ON public.managed_entities FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Authenticated users can manage managed_entities" ON public.managed_entities;
+CREATE POLICY "Authenticated users can manage managed_entities"
+  ON public.managed_entities FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP TRIGGER IF EXISTS managed_entities_updated_at ON public.managed_entities;
+CREATE TRIGGER managed_entities_updated_at
+  BEFORE UPDATE ON public.managed_entities
+  FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
+
+
+-- ================================================================
 -- FASE 10 — RECURRING_OBLIGATIONS
 -- (requerida antes de payables por campo de referencia)
 -- ================================================================
-
-DROP TRIGGER IF EXISTS recurring_obligations_updated_at ON public.recurring_obligations;
 
 CREATE TABLE IF NOT EXISTS public.recurring_obligations (
   id                   uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -535,6 +604,7 @@ CREATE TABLE IF NOT EXISTS public.recurring_obligations (
   beneficiary_type     text,
   beneficiary_id       uuid,
   beneficiary_name     text,
+  managed_entity_id    uuid    REFERENCES public.managed_entities(id),
   amount               numeric(14,2),
   frequency            text    NOT NULL
                        CHECK (frequency IN ('weekly','biweekly','monthly','quarterly','annual','custom')),
@@ -545,12 +615,16 @@ CREATE TABLE IF NOT EXISTS public.recurring_obligations (
   active               boolean NOT NULL DEFAULT true,
   reminder_days_before integer NOT NULL DEFAULT 3 CHECK (reminder_days_before >= 0),
   notes                text,
+  archived_at          timestamptz,
+  archived_by          uuid    REFERENCES auth.users(id),
   created_by           uuid    REFERENCES auth.users(id),
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS recurring_obligations_active_idx ON public.recurring_obligations (active);
+CREATE INDEX IF NOT EXISTS recurring_obligations_active_idx       ON public.recurring_obligations (active);
+CREATE INDEX IF NOT EXISTS recurring_obligations_archived_at_idx  ON public.recurring_obligations (archived_at);
+CREATE INDEX IF NOT EXISTS recurring_obligations_entity_idx       ON public.recurring_obligations (managed_entity_id);
 
 ALTER TABLE public.recurring_obligations ENABLE ROW LEVEL SECURITY;
 
@@ -562,6 +636,7 @@ DROP POLICY IF EXISTS "Authenticated users can manage recurring_obligations" ON 
 CREATE POLICY "Authenticated users can manage recurring_obligations"
   ON public.recurring_obligations FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
+DROP TRIGGER IF EXISTS recurring_obligations_updated_at ON public.recurring_obligations;
 CREATE TRIGGER recurring_obligations_updated_at
   BEFORE UPDATE ON public.recurring_obligations
   FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
@@ -582,7 +657,7 @@ CREATE TABLE IF NOT EXISTS public.payables (
   beneficiary_type        text,
   beneficiary_id          uuid,
   beneficiary_name        text,
-  managed_entity_id       uuid,
+  managed_entity_id       uuid    REFERENCES public.managed_entities(id),
   project_id              uuid    REFERENCES public.projects(id),
   supplier_id             uuid    REFERENCES public.suppliers(id),
   amount                  numeric(14,2) NOT NULL,
@@ -762,7 +837,7 @@ BEGIN
   RETURNING id INTO v_project_id;
 
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'project', v_project_id::text, 'created',
+  VALUES (auth.uid(), 'project', v_project_id, 'created',
           jsonb_build_object('origin', 'manual', 'name', p_name));
 
   RETURN v_project_id;
@@ -812,7 +887,7 @@ BEGIN
   WHERE id = p_project_id;
 
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'project', p_project_id::text, 'updated', v_meta);
+  VALUES (auth.uid(), 'project', p_project_id, 'updated', v_meta);
 END;
 $$;
 
@@ -832,7 +907,7 @@ BEGIN
   UPDATE public.projects SET status = p_status, updated_at = now()
   WHERE id = p_project_id;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'project', p_project_id::text, 'status_changed',
+  VALUES (auth.uid(), 'project', p_project_id, 'status_changed',
           jsonb_build_object('new_status', p_status));
 END;
 $$;
@@ -849,7 +924,7 @@ BEGIN
   UPDATE public.contracts SET status = 'completed', updated_at = now()
   WHERE project_id = p_project_id AND status NOT IN ('completed','cancelled');
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'project', p_project_id::text, 'completed',
+  VALUES (auth.uid(), 'project', p_project_id, 'completed',
           jsonb_build_object('completion_date', CURRENT_DATE::text));
 END;
 $$;
@@ -874,12 +949,12 @@ BEGIN
     SET archived_at = now(), archived_by = auth.uid(), updated_at = now()
     WHERE id = p_project_id;
     INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-    VALUES (auth.uid(), 'project', p_project_id::text, 'archived',
+    VALUES (auth.uid(), 'project', p_project_id, 'archived',
             jsonb_build_object('reason', 'has_relations'));
     RETURN 'archived';
   ELSE
     INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-    VALUES (auth.uid(), 'project', p_project_id::text, 'deleted', '{}'::jsonb);
+    VALUES (auth.uid(), 'project', p_project_id, 'deleted', '{}'::jsonb);
     DELETE FROM public.projects WHERE id = p_project_id;
     RETURN 'deleted';
   END IF;
@@ -896,7 +971,7 @@ BEGIN
   SET archived_at = now(), archived_by = auth.uid()
   WHERE id = p_project_id AND archived_at IS NULL;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'project', p_project_id::text, 'archived', '{}'::jsonb);
+  VALUES (auth.uid(), 'project', p_project_id, 'archived', '{}'::jsonb);
 END;
 $$;
 
@@ -909,7 +984,7 @@ BEGIN
   SET archived_at = NULL, archived_by = NULL
   WHERE id = p_project_id AND archived_at IS NOT NULL;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'project', p_project_id::text, 'restored', '{}'::jsonb);
+  VALUES (auth.uid(), 'project', p_project_id, 'restored', '{}'::jsonb);
 END;
 $$;
 
@@ -969,7 +1044,7 @@ BEGIN
    NULL, 'pending');
 
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'project', v_project_id::text, 'created',
+  VALUES (auth.uid(), 'project', v_project_id, 'created',
     jsonb_build_object('project_number', v_project_number, 'quote_id', p_quote_id,
                        'amount', v_quote.total));
 
@@ -1005,7 +1080,7 @@ BEGIN
     updated_at = now()
   WHERE id = p_contract_id;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'contract', p_contract_id::text, p_status,
+  VALUES (auth.uid(), 'contract', p_contract_id, p_status,
           jsonb_build_object('status', p_status));
 END;
 $$;
@@ -1035,7 +1110,7 @@ BEGIN
   )
   RETURNING id INTO v_id;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'contract', v_id::text, 'created',
+  VALUES (auth.uid(), 'contract', v_id, 'created',
           jsonb_build_object('origin', 'manual'));
   RETURN v_id;
 END;
@@ -1063,7 +1138,7 @@ BEGIN
     updated_at    = now()
   WHERE id = p_contract_id;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'contract', p_contract_id::text, 'updated', '{}'::jsonb);
+  VALUES (auth.uid(), 'contract', p_contract_id, 'updated', '{}'::jsonb);
 END;
 $$;
 
@@ -1091,7 +1166,7 @@ BEGIN
   ) VALUES (p_client_id, p_project_id, p_concept, p_amount, p_due_date, p_notes, 'pending', 0)
   RETURNING id INTO v_id;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'receivable', v_id::text, 'created',
+  VALUES (auth.uid(), 'receivable', v_id, 'created',
           jsonb_build_object('origin', 'manual'));
   RETURN v_id;
 END;
@@ -1115,7 +1190,7 @@ BEGIN
     updated_at = now()
   WHERE id = p_receivable_id;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'receivable', p_receivable_id::text, 'updated', '{}'::jsonb);
+  VALUES (auth.uid(), 'receivable', p_receivable_id, 'updated', '{}'::jsonb);
 END;
 $$;
 
@@ -1140,7 +1215,7 @@ BEGIN
     updated_at          = now()
   WHERE id = p_receivable_id;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'receivable', p_receivable_id::text, 'cancelled',
+  VALUES (auth.uid(), 'receivable', p_receivable_id, 'cancelled',
           jsonb_build_object('reason', p_reason));
 END;
 $$;
@@ -1200,7 +1275,7 @@ BEGIN
   WHERE id = p_receivable_id;
 
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'payment', v_payment_id::text, 'received',
+  VALUES (auth.uid(), 'payment', v_payment_id, 'received',
     jsonb_build_object(
       'receivable_id', p_receivable_id,
       'project_id', v_receivable.project_id,
@@ -1267,7 +1342,7 @@ BEGIN
   WHERE id = v_payment.receivable_id;
 
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'payment', p_payment_id::text, 'voided',
+  VALUES (auth.uid(), 'payment', p_payment_id, 'voided',
           jsonb_build_object('reason', p_reason, 'project_id', v_payment.project_id));
 END;
 $$;
@@ -1283,7 +1358,7 @@ BEGIN
   UPDATE public.suppliers SET archived_at = now(), archived_by = auth.uid()
   WHERE id = p_supplier_id AND archived_at IS NULL;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'supplier', p_supplier_id::text, 'archived', '{}'::jsonb);
+  VALUES (auth.uid(), 'supplier', p_supplier_id, 'archived', '{}'::jsonb);
 END; $$;
 
 CREATE OR REPLACE FUNCTION public.restore_supplier(p_supplier_id uuid)
@@ -1292,7 +1367,7 @@ BEGIN
   UPDATE public.suppliers SET archived_at = NULL, archived_by = NULL
   WHERE id = p_supplier_id AND archived_at IS NOT NULL;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'supplier', p_supplier_id::text, 'restored', '{}'::jsonb);
+  VALUES (auth.uid(), 'supplier', p_supplier_id, 'restored', '{}'::jsonb);
 END; $$;
 
 CREATE OR REPLACE FUNCTION public.archive_employee(p_employee_id uuid)
@@ -1301,7 +1376,7 @@ BEGIN
   UPDATE public.employees SET archived_at = now(), archived_by = auth.uid()
   WHERE id = p_employee_id AND archived_at IS NULL;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'employee', p_employee_id::text, 'archived', '{}'::jsonb);
+  VALUES (auth.uid(), 'employee', p_employee_id, 'archived', '{}'::jsonb);
 END; $$;
 
 CREATE OR REPLACE FUNCTION public.restore_employee(p_employee_id uuid)
@@ -1310,7 +1385,720 @@ BEGIN
   UPDATE public.employees SET archived_at = NULL, archived_by = NULL
   WHERE id = p_employee_id AND archived_at IS NOT NULL;
   INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
-  VALUES (auth.uid(), 'employee', p_employee_id::text, 'restored', '{}'::jsonb);
+  VALUES (auth.uid(), 'employee', p_employee_id, 'restored', '{}'::jsonb);
+END; $$;
+
+
+-- ================================================================
+-- FASE 17 — RPCs DE OBLIGACIONES Y PAYABLES
+-- ================================================================
+
+-- ── archive_obligation / restore_obligation ──────────────────────
+CREATE OR REPLACE FUNCTION public.archive_obligation(p_obligation_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.recurring_obligations
+  SET archived_at = now(), archived_by = auth.uid()
+  WHERE id = p_obligation_id AND archived_at IS NULL;
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'obligation', p_obligation_id, 'archived', '{}'::jsonb);
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.restore_obligation(p_obligation_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.recurring_obligations
+  SET archived_at = NULL, archived_by = NULL
+  WHERE id = p_obligation_id AND archived_at IS NOT NULL;
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'obligation', p_obligation_id, 'restored', '{}'::jsonb);
+END; $$;
+
+-- ── generate_payable_from_obligation ─────────────────────────────
+-- Anti-duplicado por (recurring_obligation_id, period_key)
+CREATE OR REPLACE FUNCTION public.generate_payable_from_obligation(
+  p_obligation_id uuid,
+  p_period_key    text,
+  p_due_date      date,
+  p_amount        numeric DEFAULT NULL
+)
+RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_obl  public.recurring_obligations%ROWTYPE;
+  v_id   uuid;
+BEGIN
+  SELECT * INTO v_obl FROM public.recurring_obligations WHERE id = p_obligation_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Obligación no encontrada'; END IF;
+  IF NOT v_obl.active THEN RAISE EXCEPTION 'La obligación está inactiva'; END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.payables
+    WHERE recurring_obligation_id = p_obligation_id
+      AND period_key = p_period_key
+  ) THEN
+    SELECT id INTO v_id FROM public.payables
+    WHERE recurring_obligation_id = p_obligation_id
+      AND period_key = p_period_key;
+    RETURN v_id;
+  END IF;
+
+  INSERT INTO public.payables (
+    concept, category_id, beneficiary_type, beneficiary_name,
+    managed_entity_id, amount, due_date, recurring_obligation_id,
+    period_key, status, created_by
+  ) VALUES (
+    v_obl.name,
+    v_obl.category_id,
+    v_obl.beneficiary_type,
+    v_obl.beneficiary_name,
+    v_obl.managed_entity_id,
+    COALESCE(p_amount, v_obl.amount, 0),
+    p_due_date,
+    p_obligation_id,
+    p_period_key,
+    'pending',
+    auth.uid()
+  )
+  RETURNING id INTO v_id;
+
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'payable', v_id, 'generated_from_obligation',
+          jsonb_build_object('obligation_id', p_obligation_id, 'period_key', p_period_key));
+
+  RETURN v_id;
+END;
+$$;
+
+-- ── generate_due_recurring_obligations ───────────────────────────
+-- Genera payables para obligaciones próximas; usada por Dashboard y run_obligations_job
+CREATE OR REPLACE FUNCTION public.generate_due_recurring_obligations(
+  p_lookahead_days integer DEFAULT 7
+)
+RETURNS TABLE(obligation_id uuid, obligation_name text, period_key text, status text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_obl    record;
+  v_due    date;
+  v_pk     text;
+  v_exists boolean;
+BEGIN
+  FOR v_obl IN
+    SELECT * FROM public.recurring_obligations
+    WHERE active = true AND archived_at IS NULL
+      AND (end_date IS NULL OR end_date >= CURRENT_DATE)
+      AND amount IS NOT NULL AND amount > 0
+  LOOP
+    -- Compute next due date based on frequency
+    v_due := CASE v_obl.frequency
+      WHEN 'monthly'   THEN date_trunc('month', CURRENT_DATE)::date
+                          + INTERVAL '1 month' * 0
+                          + (COALESCE(v_obl.day_of_month, 1) - 1)
+      WHEN 'annual'    THEN make_date(
+                            EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                            EXTRACT(MONTH FROM v_obl.start_date)::int,
+                            EXTRACT(DAY   FROM v_obl.start_date)::int)
+      ELSE NULL
+    END;
+
+    CONTINUE WHEN v_due IS NULL;
+    CONTINUE WHEN v_due > CURRENT_DATE + p_lookahead_days;
+    CONTINUE WHEN v_due < CURRENT_DATE - 31;
+
+    v_pk := CASE v_obl.frequency
+      WHEN 'monthly'   THEN to_char(v_due, 'YYYY-MM')
+      WHEN 'annual'    THEN to_char(v_due, 'YYYY')
+      ELSE to_char(v_due, 'YYYY-MM-DD')
+    END;
+
+    SELECT EXISTS (
+      SELECT 1 FROM public.payables
+      WHERE recurring_obligation_id = v_obl.id AND period_key = v_pk
+    ) INTO v_exists;
+
+    IF v_exists THEN
+      obligation_id   := v_obl.id;
+      obligation_name := v_obl.name;
+      period_key      := v_pk;
+      status          := 'already_exists';
+      RETURN NEXT;
+    ELSIF v_obl.amount IS NULL OR v_obl.amount = 0 THEN
+      obligation_id   := v_obl.id;
+      obligation_name := v_obl.name;
+      period_key      := v_pk;
+      status          := 'skipped_no_amount';
+      RETURN NEXT;
+    ELSE
+      INSERT INTO public.payables (
+        concept, category_id, beneficiary_type, beneficiary_name,
+        managed_entity_id, amount, due_date, recurring_obligation_id,
+        period_key, status, created_by
+      ) VALUES (
+        v_obl.name, v_obl.category_id, v_obl.beneficiary_type,
+        v_obl.beneficiary_name, v_obl.managed_entity_id,
+        v_obl.amount, v_due, v_obl.id, v_pk, 'pending', auth.uid()
+      );
+      obligation_id   := v_obl.id;
+      obligation_name := v_obl.name;
+      period_key      := v_pk;
+      status          := 'created';
+      RETURN NEXT;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+-- run_obligations_job: wrapper que registra ejecución en job_runs (si existe la tabla)
+CREATE OR REPLACE FUNCTION public.run_obligations_job(
+  p_lookahead_days integer DEFAULT 7
+)
+RETURNS TABLE(obligation_id uuid, obligation_name text, period_key text, status text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN QUERY SELECT * FROM public.generate_due_recurring_obligations(p_lookahead_days);
+END;
+$$;
+
+-- ── register_payable_payment ─────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.register_payable_payment(
+  p_payable_id      uuid,
+  p_amount          numeric,
+  p_payment_date    date,
+  p_payment_method  text    DEFAULT NULL,
+  p_reference       text    DEFAULT NULL,
+  p_notes           text    DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = public
+AS $$
+DECLARE
+  v_payable    public.payables%ROWTYPE;
+  v_new_paid   numeric;
+  v_new_status text;
+  v_payment_id uuid;
+  v_balance    numeric;
+BEGIN
+  SELECT * INTO v_payable FROM public.payables
+  WHERE id = p_payable_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Cuenta por pagar no encontrada'; END IF;
+  IF v_payable.status IN ('paid','cancelled') THEN
+    RAISE EXCEPTION 'Esta cuenta ya está %', v_payable.status;
+  END IF;
+  IF p_amount <= 0 THEN RAISE EXCEPTION 'El monto debe ser mayor a cero'; END IF;
+  v_balance := v_payable.amount - v_payable.paid_amount;
+  IF p_amount > v_balance THEN
+    RAISE EXCEPTION 'El monto supera el saldo pendiente (%)', v_balance;
+  END IF;
+
+  INSERT INTO public.payments_made (
+    payable_id, amount, payment_date, payment_method, reference, notes, created_by
+  ) VALUES (
+    p_payable_id, p_amount, p_payment_date, p_payment_method, p_reference, p_notes, auth.uid()
+  )
+  RETURNING id INTO v_payment_id;
+
+  v_new_paid   := v_payable.paid_amount + p_amount;
+  v_new_status := CASE
+    WHEN v_new_paid >= v_payable.amount THEN 'paid'
+    WHEN v_new_paid > 0                 THEN 'partial'
+    ELSE 'pending'
+  END;
+
+  UPDATE public.payables SET
+    paid_amount = v_new_paid,
+    status      = v_new_status,
+    updated_at  = now()
+  WHERE id = p_payable_id;
+
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'payment_made', v_payment_id, 'registered',
+    jsonb_build_object(
+      'payable_id',  p_payable_id,
+      'amount',      p_amount,
+      'new_status',  v_new_status
+    ));
+
+  RETURN jsonb_build_object(
+    'payment_id',      v_payment_id,
+    'new_paid_amount', v_new_paid,
+    'new_status',      v_new_status,
+    'remaining',       v_payable.amount - v_new_paid
+  );
+END;
+$$;
+
+-- ── void_made_payment ────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.void_made_payment(
+  p_payment_id uuid,
+  p_reason     text
+)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_payment    public.payments_made%ROWTYPE;
+  v_total      numeric;
+  v_new_paid   numeric;
+  v_new_status text;
+BEGIN
+  IF p_reason IS NULL OR trim(p_reason) = '' THEN
+    RAISE EXCEPTION 'El motivo de anulación es obligatorio';
+  END IF;
+  SELECT * INTO v_payment FROM public.payments_made
+  WHERE id = p_payment_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Pago no encontrado'; END IF;
+  IF v_payment.voided_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Este pago ya fue anulado'; END IF;
+
+  UPDATE public.payments_made SET
+    voided_at   = now(),
+    voided_by   = auth.uid(),
+    void_reason = p_reason
+  WHERE id = p_payment_id;
+
+  SELECT amount INTO v_total FROM public.payables WHERE id = v_payment.payable_id;
+  SELECT COALESCE(SUM(amount), 0) INTO v_new_paid
+  FROM public.payments_made
+  WHERE payable_id = v_payment.payable_id AND voided_at IS NULL;
+
+  v_new_status := CASE
+    WHEN v_new_paid >= v_total THEN 'paid'
+    WHEN v_new_paid > 0        THEN 'partial'
+    ELSE 'pending'
+  END;
+
+  UPDATE public.payables SET
+    paid_amount = v_new_paid,
+    status      = v_new_status,
+    updated_at  = now()
+  WHERE id = v_payment.payable_id;
+
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'payment_made', p_payment_id, 'voided',
+          jsonb_build_object('reason', p_reason, 'payable_id', v_payment.payable_id));
+END;
+$$;
+
+-- ── cancel_payable ───────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.cancel_payable(
+  p_payable_id uuid,
+  p_reason     text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE v_paid numeric;
+BEGIN
+  SELECT paid_amount INTO v_paid FROM public.payables WHERE id = p_payable_id;
+  IF v_paid > 0 THEN
+    RAISE EXCEPTION 'No se puede cancelar una cuenta con pagos registrados.';
+  END IF;
+  UPDATE public.payables SET
+    status              = 'cancelled',
+    cancelled_by        = auth.uid(),
+    cancellation_reason = p_reason,
+    updated_at          = now()
+  WHERE id = p_payable_id;
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'payable', p_payable_id, 'cancelled',
+          jsonb_build_object('reason', p_reason));
+END;
+$$;
+
+
+-- ================================================================
+-- FASE 18 — RPCs DE COTIZACIONES
+-- CREATE OR REPLACE: actualiza las existentes en remoto de forma segura
+-- ================================================================
+
+-- ── send_quote_to_review ─────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.send_quote_to_review(p_quote_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
+BEGIN
+  UPDATE public.quotes SET
+    status       = 'review',
+    submitted_by = auth.uid(),
+    submitted_at = now(),
+    updated_at   = now()
+  WHERE id = p_quote_id AND status = 'draft';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'La cotización no está en estado borrador';
+  END IF;
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'quote', p_quote_id, 'sent_to_review', '{}'::jsonb);
+END; $$;
+
+-- ── approve_quote ────────────────────────────────────────────────
+-- Aprueba la cotización y crea proyecto + contrato + cobros iniciales.
+-- Devuelve jsonb con project_id, project_number, contract_id, contract_number.
+CREATE OR REPLACE FUNCTION public.approve_quote(p_quote_id uuid)
+RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
+DECLARE
+  v_quote          public.quotes%ROWTYPE;
+  v_project_id     uuid;
+  v_project_number bigint;
+  v_contract_id    uuid;
+  v_contract_number bigint;
+BEGIN
+  SELECT * INTO v_quote FROM public.quotes WHERE id = p_quote_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Cotización no encontrada'; END IF;
+  IF v_quote.status NOT IN ('review', 'draft') THEN
+    RAISE EXCEPTION 'La cotización ya fue procesada (estado: %)', v_quote.status;
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.projects WHERE quote_id = p_quote_id) THEN
+    RAISE EXCEPTION 'already exists for this quote';
+  END IF;
+
+  -- Actualizar cotización
+  UPDATE public.quotes SET
+    status      = 'approved',
+    approved_by = auth.uid(),
+    approved_at = now(),
+    updated_at  = now()
+  WHERE id = p_quote_id;
+
+  -- Crear proyecto
+  INSERT INTO public.projects (
+    client_id, quote_id, name, total_amount, status, project_origin,
+    project_type, responsible_architect_name, responsible_architect_id, created_by
+  ) VALUES (
+    v_quote.client_id, p_quote_id,
+    COALESCE(v_quote.title, 'Proyecto sin título'),
+    COALESCE(v_quote.total, 0), 'planning', 'quote',
+    v_quote.project_type,
+    v_quote.responsible_architect_name, v_quote.responsible_architect_id,
+    auth.uid()
+  )
+  RETURNING id, project_number INTO v_project_id, v_project_number;
+
+  -- Crear contrato
+  INSERT INTO public.contracts (
+    project_id, client_id, quote_id, total_amount, terms, status, contract_date, created_by
+  ) VALUES (
+    v_project_id, v_quote.client_id, p_quote_id,
+    COALESCE(v_quote.total, 0),
+    COALESCE(v_quote.terms, ARRAY[]::text[]),
+    'draft', CURRENT_DATE, auth.uid()
+  )
+  RETURNING id, contract_number INTO v_contract_id, v_contract_number;
+
+  -- Crear cobros iniciales si hay montos definidos
+  IF COALESCE(v_quote.initial_payment_amount, 0) > 0 THEN
+    INSERT INTO public.receivables (
+      project_id, client_id, quote_id, concept, installment_number,
+      percentage, amount, status
+    ) VALUES (
+      v_project_id, v_quote.client_id, p_quote_id,
+      'Abono inicial', 1,
+      COALESCE(v_quote.initial_payment_percentage, 0),
+      v_quote.initial_payment_amount, 'pending'
+    );
+  END IF;
+  IF COALESCE(v_quote.final_payment_amount, 0) > 0 THEN
+    INSERT INTO public.receivables (
+      project_id, client_id, quote_id, concept, installment_number,
+      percentage, amount, status
+    ) VALUES (
+      v_project_id, v_quote.client_id, p_quote_id,
+      'Saldo final', 2,
+      COALESCE(v_quote.final_payment_percentage, 0),
+      v_quote.final_payment_amount, 'pending'
+    );
+  END IF;
+
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'quote', p_quote_id, 'approved',
+    jsonb_build_object('project_id', v_project_id, 'project_number', v_project_number));
+
+  RETURN jsonb_build_object(
+    'project_id',      v_project_id,
+    'project_number',  v_project_number,
+    'contract_id',     v_contract_id,
+    'contract_number', v_contract_number
+  );
+END; $$;
+
+-- ── reject_quote ─────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.reject_quote(
+  p_quote_id         uuid,
+  p_rejection_reason text DEFAULT NULL,
+  p_rejection_notes  text DEFAULT NULL
+)
+RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
+BEGIN
+  UPDATE public.quotes SET
+    status           = 'rejected',
+    rejected_by      = auth.uid(),
+    rejected_at      = now(),
+    rejection_reason = p_rejection_reason,
+    rejection_notes  = p_rejection_notes,
+    updated_at       = now()
+  WHERE id = p_quote_id AND status = 'review';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'La cotización no está en estado revisión';
+  END IF;
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'quote', p_quote_id, 'rejected',
+    jsonb_build_object('reason', p_rejection_reason));
+END; $$;
+
+-- ── duplicate_quote ──────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.duplicate_quote(p_quote_id uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_old    public.quotes%ROWTYPE;
+  v_new_id uuid;
+BEGIN
+  SELECT * INTO v_old FROM public.quotes WHERE id = p_quote_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Cotización no encontrada'; END IF;
+
+  INSERT INTO public.quotes (
+    client_id, title, status, issue_date,
+    subtotal, discount, tax, total,
+    initial_payment_percentage, initial_payment_amount,
+    final_payment_percentage, final_payment_amount,
+    includes, excludes, terms, notes,
+    project_type, responsible_architect_name, responsible_architect_id,
+    created_by
+  ) VALUES (
+    v_old.client_id,
+    COALESCE(v_old.title, '') || ' (copia)',
+    'draft', CURRENT_DATE,
+    v_old.subtotal, COALESCE(v_old.discount,0), COALESCE(v_old.tax,0), v_old.total,
+    COALESCE(v_old.initial_payment_percentage,0), COALESCE(v_old.initial_payment_amount,0),
+    COALESCE(v_old.final_payment_percentage,0), COALESCE(v_old.final_payment_amount,0),
+    COALESCE(v_old.includes, ARRAY[]::text[]),
+    COALESCE(v_old.excludes, ARRAY[]::text[]),
+    COALESCE(v_old.terms, ARRAY[]::text[]),
+    v_old.notes,
+    v_old.project_type, v_old.responsible_architect_name, v_old.responsible_architect_id,
+    auth.uid()
+  )
+  RETURNING id INTO v_new_id;
+
+  INSERT INTO public.quote_items (
+    quote_id, description, height, width, depth, measurement_notes,
+    quantity, unit_price, line_total, sort_order
+  )
+  SELECT v_new_id, description, height, width, depth, measurement_notes,
+         quantity, unit_price, line_total, sort_order
+  FROM public.quote_items WHERE quote_id = p_quote_id;
+
+  INSERT INTO public.quote_payment_terms (
+    quote_id, installment_number, concept, percentage, amount,
+    due_condition, sort_order
+  )
+  SELECT v_new_id, installment_number, concept, percentage, amount,
+         due_condition, sort_order
+  FROM public.quote_payment_terms WHERE quote_id = p_quote_id;
+
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'quote', v_new_id, 'duplicated',
+    jsonb_build_object('original_id', p_quote_id));
+
+  RETURN v_new_id;
+END; $$;
+
+-- ── archive_quote / restore_quote ────────────────────────────────
+CREATE OR REPLACE FUNCTION public.archive_quote(p_quote_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.quotes SET archived_at = now(), archived_by = auth.uid()
+  WHERE id = p_quote_id AND archived_at IS NULL;
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'quote', p_quote_id, 'archived', '{}'::jsonb);
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.restore_quote(p_quote_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.quotes SET archived_at = NULL, archived_by = NULL
+  WHERE id = p_quote_id AND archived_at IS NOT NULL;
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'quote', p_quote_id, 'restored', '{}'::jsonb);
+END; $$;
+
+-- ── archive_client / restore_client ──────────────────────────────
+CREATE OR REPLACE FUNCTION public.archive_client(p_client_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.clients SET archived_at = now(), archived_by = auth.uid()
+  WHERE id = p_client_id AND archived_at IS NULL;
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'client', p_client_id, 'archived', '{}'::jsonb);
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.restore_client(p_client_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.clients SET archived_at = NULL, archived_by = NULL
+  WHERE id = p_client_id AND archived_at IS NOT NULL;
+  INSERT INTO public.activity_log (user_id, entity_type, entity_id, action, metadata)
+  VALUES (auth.uid(), 'client', p_client_id, 'restored', '{}'::jsonb);
+END; $$;
+
+
+-- ================================================================
+-- FASE 19 — RPCs DE DASHBOARD
+-- ================================================================
+
+-- ── get_dashboard_summary ────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.get_dashboard_summary()
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_today      date    := CURRENT_DATE;
+  v_week_end   date    := CURRENT_DATE + 7;
+  v_mon_start  date    := date_trunc('month', CURRENT_DATE)::date;
+  v_mon_end    date    := (date_trunc('month', CURRENT_DATE)::date + interval '1 month')::date - 1;
+BEGIN
+  RETURN jsonb_build_object(
+    'receivables', jsonb_build_object(
+      'total_pending',   COALESCE((SELECT SUM(amount - paid_amount) FROM receivables
+                           WHERE status NOT IN ('paid','cancelled')), 0),
+      'overdue_amount',  COALESCE((SELECT SUM(amount - paid_amount) FROM receivables
+                           WHERE status NOT IN ('paid','cancelled') AND due_date < v_today), 0),
+      'overdue_count',   COALESCE((SELECT COUNT(*) FROM receivables
+                           WHERE status NOT IN ('paid','cancelled') AND due_date < v_today), 0),
+      'due_today',       COALESCE((SELECT COUNT(*) FROM receivables
+                           WHERE status NOT IN ('paid','cancelled') AND due_date = v_today), 0),
+      'due_week',        COALESCE((SELECT COUNT(*) FROM receivables
+                           WHERE status NOT IN ('paid','cancelled')
+                             AND due_date BETWEEN v_today AND v_week_end), 0),
+      'collected_month', COALESCE((SELECT SUM(amount) FROM payments_received
+                           WHERE payment_date BETWEEN v_mon_start AND v_mon_end
+                             AND voided_at IS NULL), 0)
+    ),
+    'payables', jsonb_build_object(
+      'total_pending',   COALESCE((SELECT SUM(amount - paid_amount) FROM payables
+                           WHERE status NOT IN ('paid','cancelled')), 0),
+      'overdue_amount',  COALESCE((SELECT SUM(amount - paid_amount) FROM payables
+                           WHERE status NOT IN ('paid','cancelled') AND due_date < v_today), 0),
+      'overdue_count',   COALESCE((SELECT COUNT(*) FROM payables
+                           WHERE status NOT IN ('paid','cancelled') AND due_date < v_today), 0),
+      'due_today',       COALESCE((SELECT COUNT(*) FROM payables
+                           WHERE status NOT IN ('paid','cancelled') AND due_date = v_today), 0),
+      'due_week',        COALESCE((SELECT COUNT(*) FROM payables
+                           WHERE status NOT IN ('paid','cancelled')
+                             AND due_date BETWEEN v_today AND v_week_end), 0),
+      'paid_month',      COALESCE((SELECT SUM(amount) FROM payments_made
+                           WHERE payment_date BETWEEN v_mon_start AND v_mon_end
+                             AND voided_at IS NULL), 0)
+    ),
+    'projects', jsonb_build_object(
+      'active',       COALESCE((SELECT COUNT(*) FROM projects
+                        WHERE status NOT IN ('completed','cancelled') AND archived_at IS NULL), 0),
+      'delayed',      COALESCE((SELECT COUNT(*) FROM projects
+                        WHERE status NOT IN ('completed','cancelled') AND archived_at IS NULL
+                          AND estimated_delivery_date IS NOT NULL
+                          AND estimated_delivery_date < v_today), 0),
+      'needs_design', COALESCE((SELECT COUNT(*) FROM projects
+                        WHERE status IN ('design','design_approval') AND archived_at IS NULL), 0)
+    ),
+    'tasks', jsonb_build_object(
+      'pending_today', 0,
+      'pending_total', 0
+    ),
+    'managed_entities', (
+      SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+          'id',           me.id,
+          'name',         me.name,
+          'pending',      COALESCE(s.pending, 0),
+          'overdue',      COALESCE(s.overdue, 0),
+          'next_due',     NULL,
+          'next_concept', NULL
+        )
+      ), '[]'::jsonb)
+      FROM managed_entities me
+      LEFT JOIN LATERAL (
+        SELECT
+          SUM(CASE WHEN p.status NOT IN ('paid','cancelled')
+                   THEN p.amount - p.paid_amount ELSE 0 END) AS pending,
+          SUM(CASE WHEN p.status NOT IN ('paid','cancelled') AND p.due_date < v_today
+                   THEN p.amount - p.paid_amount ELSE 0 END) AS overdue
+        FROM payables p
+        WHERE p.managed_entity_id = me.id
+      ) s ON true
+      WHERE me.active = true
+    ),
+    'quotes_review_count', COALESCE((SELECT COUNT(*) FROM quotes
+                             WHERE status = 'review' AND archived_at IS NULL), 0),
+    'documents_expiring',  0,
+    'today',    v_today::text,
+    'timezone', 'America/Caracas'
+  );
+END; $$;
+
+-- ── get_pending_items ────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.get_pending_items(p_limit integer DEFAULT 50)
+RETURNS TABLE(
+  item_type    text,
+  item_id      uuid,
+  label        text,
+  sub_label    text,
+  amount       numeric,
+  due_date     date,
+  priority     text,
+  urgency_rank integer,
+  route        text,
+  entity_id    uuid
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_today date := CURRENT_DATE;
+BEGIN
+  RETURN QUERY
+  SELECT
+    'receivable'::text,
+    r.id,
+    COALESCE(c.full_name, 'Cliente') || ' — ' || r.concept,
+    'Cobro'::text,
+    r.amount - r.paid_amount,
+    r.due_date,
+    CASE
+      WHEN r.due_date IS NOT NULL AND r.due_date < v_today THEN 'urgent'
+      WHEN r.due_date = v_today                            THEN 'high'
+      ELSE 'normal'
+    END,
+    CASE
+      WHEN r.due_date IS NOT NULL AND r.due_date < v_today THEN 1
+      WHEN r.due_date = v_today                            THEN 2
+      ELSE 3
+    END,
+    '/cuentas-por-cobrar'::text,
+    r.project_id
+  FROM receivables r
+  LEFT JOIN clients c ON c.id = r.client_id
+  WHERE r.status NOT IN ('paid','cancelled') AND (r.amount - r.paid_amount) > 0
+
+  UNION ALL
+
+  SELECT
+    'payable'::text,
+    p.id,
+    p.concept,
+    COALESCE(p.beneficiary_name, '—'),
+    p.amount - p.paid_amount,
+    p.due_date,
+    CASE
+      WHEN p.due_date IS NOT NULL AND p.due_date < v_today THEN 'urgent'
+      WHEN p.due_date = v_today                            THEN 'high'
+      ELSE 'normal'
+    END,
+    CASE
+      WHEN p.due_date IS NOT NULL AND p.due_date < v_today THEN 1
+      WHEN p.due_date = v_today                            THEN 2
+      ELSE 3
+    END,
+    ('/cuentas-por-pagar/' || p.id::text)::text,
+    p.id
+  FROM payables p
+  WHERE p.status NOT IN ('paid','cancelled') AND (p.amount - p.paid_amount) > 0
+
+  ORDER BY urgency_rank ASC, due_date ASC NULLS LAST
+  LIMIT p_limit;
 END; $$;
 
 
@@ -1325,7 +2113,8 @@ WHERE table_schema = 'public'
     'projects','contracts','receivables','payments_received',
     'project_designs','project_materials',
     'suppliers','employees','expense_categories',
-    'payables','payments_made','recurring_obligations','payment_methods'
+    'payables','payments_made','recurring_obligations','payment_methods',
+    'managed_entities'
   )
 ORDER BY table_name;
 
@@ -1341,7 +2130,13 @@ WHERE n.nspname = 'public'
     'register_receivable_payment','void_received_payment',
     'archive_supplier','restore_supplier',
     'archive_employee','restore_employee',
-    'current_user_is_active','is_admin','is_admin_or_administration'
+    'current_user_is_active','is_admin','is_admin_or_administration',
+    'archive_obligation','restore_obligation',
+    'generate_payable_from_obligation','generate_due_recurring_obligations',
+    'run_obligations_job','register_payable_payment','void_made_payment','cancel_payable',
+    'send_quote_to_review','approve_quote','reject_quote','duplicate_quote',
+    'archive_quote','restore_quote','archive_client','restore_client',
+    'get_dashboard_summary','get_pending_items'
   )
 ORDER BY function_name;
 
