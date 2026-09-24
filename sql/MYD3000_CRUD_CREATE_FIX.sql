@@ -143,6 +143,14 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
 
 ALTER TABLE public.contracts ALTER COLUMN project_id DROP NOT NULL;
 
+-- receivables.project_id: una cuenta manual puede no tener proyecto.
+-- También se debe hacer nullable en payments_received.project_id porque
+-- register_receivable_payment lee v_rec.project_id e inserta directamente
+-- en payments_received.project_id (que también era NOT NULL). Sin este
+-- segundo ALTER la creación del pago sobre una cuenta manual fallaría.
+ALTER TABLE public.receivables     ALTER COLUMN project_id DROP NOT NULL;
+ALTER TABLE public.payments_received ALTER COLUMN project_id DROP NOT NULL;
+
 
 -- ================================================================
 -- BLOQUE F — Recargar schema de PostgREST
