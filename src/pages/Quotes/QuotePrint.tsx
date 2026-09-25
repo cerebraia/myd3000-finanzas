@@ -128,17 +128,9 @@ export default function QuotePrint() {
             {/* Logo + empresa */}
             <div>
               <img
-                src="/brand/myd3000-logo.svg"
+                src="/logo/MYD3000 - Logo.png"
                 alt="MYD3000"
-                style={{ height: '38px', display: 'block' }}
-                onError={e => {
-                  const el = e.currentTarget as HTMLImageElement
-                  el.style.display = 'none'
-                  const span = document.createElement('span')
-                  span.textContent = 'MYD3000'
-                  span.style.cssText = `font-size:22px;font-weight:700;color:${NAVY};`
-                  el.parentNode?.insertBefore(span, el.nextSibling)
-                }}
+                style={{ height: '52px', display: 'block', objectFit: 'contain' }}
               />
               <p style={{ fontSize: '8pt', color: MUTED, marginTop: '6px', fontWeight: 600, letterSpacing: '0.05em' }}>
                 {companyName.toUpperCase()}
