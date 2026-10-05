@@ -17,26 +17,24 @@ import type { Quote, QuoteStatus, Client } from '@/types'
 // ─── Default lists ────────────────────────────────────────────────────────────
 
 const DEFAULT_INCLUDES = [
-  'MDF 18 mm.',
-  'Fondo 3 mm.',
-  'Melamina Interna (Blanco Mate).',
-  'Melamina Externa.',
-  'Bisagras Cazoleta con Freno.',
-  'Tubo Ovalado.',
-  'Correderas Invisibles con Freno.',
-  'Sistema de Iluminación.',
-  'Instalación del Mobiliario.',
-  'Flete.',
+  'BLOOM',
+  'GAVETAS BLOOM',
+  'VISAGRA CASELETA BLOOM',
+  'VISAGRA CASELETA CON FRENOS BLOOM',
+  'GABETAS Y GAVETONES BLOOM',
+  'SISTEMA DE AVENTON BLOOM',
+  'PUESTA DE VIDRIO',
+  'WALL PANEL',
+  'FLAP PANEL',
+  'TRAS PANTALLA',
+  'TUBO OVALADO',
 ]
 
 const DEFAULT_EXCLUDES = [
-  'Pintura.',
-  'Albañilería.',
-  'Plomería.',
-  'Espejo.',
-  'Acondicionamiento de Puntos Eléctricos.',
-  'Piedra Sinterizada o Cuarzo.',
-  'Instalación de Piedra Sinterizada o Cuarzo.',
+  'DIFERIDAS',
+  'LAVAMANOS',
+  'TELEVISOR',
+  'BASE DE TV',
 ]
 
 const DEFAULT_TERMS = [
@@ -82,6 +80,7 @@ const schema = z.object({
   excludes:                    z.array(z.string().max(300)).max(50),
   terms_text:                  z.string().max(5000),
   notes:                       z.string().max(2000).optional(),
+  commercial_total:            z.number().min(0).max(100_000_000).nullable().optional(),
 })
 
 type FormData = z.infer<typeof schema>
@@ -214,29 +213,36 @@ export default function QuoteForm({ mode, initialData, preselectedClientId }: Qu
         quantity:         item.quantity,
         unit_price:       item.unit_price,
       })) ?? [{ description: '', height: '', width: '', depth: '', measurement_notes: '', quantity: 1, unit_price: 0 }],
-      discount:       initialData?.discount ?? 0,
-      tax:            initialData?.tax ?? 0,
-      payment_terms:  defaultPaymentTerms,
-      includes:       initialData?.includes ?? DEFAULT_INCLUDES,
-      excludes:       initialData?.excludes ?? DEFAULT_EXCLUDES,
-      terms_text:     initialData?.terms?.join('\n') ?? DEFAULT_TERMS.join('\n'),
-      notes:          initialData?.notes ?? '',
+      discount:          initialData?.discount ?? 0,
+      tax:               initialData?.tax ?? 0,
+      payment_terms:     defaultPaymentTerms,
+      includes:          initialData?.includes ?? DEFAULT_INCLUDES,
+      excludes:          initialData?.excludes ?? DEFAULT_EXCLUDES,
+      terms_text:        initialData?.terms?.join('\n') ?? DEFAULT_TERMS.join('\n'),
+      notes:             initialData?.notes ?? '',
+      commercial_total:  initialData?.commercial_total ?? null,
     },
   })
 
   const { fields, append, remove } = useFieldArray({ control, name: 'items' })
   const { fields: termFields, append: appendTerm, remove: removeTerm } = useFieldArray({ control, name: 'payment_terms' })
 
-  const watchedItems       = watch('items')
-  const watchedDiscount    = watch('discount')
-  const watchedTax         = watch('tax')
-  const watchedTerms       = watch('payment_terms')
-  const watchedClientId    = watch('client_id')
+  const watchedItems          = watch('items')
+  const watchedDiscount       = watch('discount')
+  const watchedTax            = watch('tax')
+  const watchedTerms          = watch('payment_terms')
+  const watchedClientId       = watch('client_id')
+  const watchedProjectType    = watch('project_type')
+  const watchedCommercialTotal = watch('commercial_total')
 
   const subtotal = watchedItems.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unit_price) || 0), 0)
   const discountAmt = Number(watchedDiscount) || 0
   const taxAmt      = Number(watchedTax) || 0
   const total       = subtotal - discountAmt + taxAmt
+  // effective total: commercial_total overrides calculated total when set
+  const effectiveTotal = (watchedCommercialTotal != null && watchedCommercialTotal > 0)
+    ? watchedCommercialTotal
+    : total
   const termsSum    = watchedTerms.reduce((s, t) => s + (Number(t.percentage) || 0), 0)
 
   useEffect(() => {
@@ -289,12 +295,17 @@ export default function QuoteForm({ mode, initialData, preselectedClientId }: Qu
       line_total:       (Number(item.quantity) || 0) * (Number(item.unit_price) || 0),
     }))
 
-    // Compute amounts from percentages
+    const commercialTotal = (data.commercial_total != null && data.commercial_total > 0)
+      ? data.commercial_total
+      : null
+    const effectiveTotalForTerms = commercialTotal ?? total
+
+    // Compute amounts from percentages using effective total
     const termsPayload = data.payment_terms.map((t, i) => ({
       installment_number: i + 1,
       concept:    t.concept,
       percentage: Number(t.percentage),
-      amount:     total * (Number(t.percentage) / 100),
+      amount:     effectiveTotalForTerms * (Number(t.percentage) / 100),
       due_date:   null,
       sort_order: i,
     }))
@@ -302,8 +313,8 @@ export default function QuoteForm({ mode, initialData, preselectedClientId }: Qu
     // For legacy fields: use first term as "initial" and rest as "final"
     const firstPct  = Number(data.payment_terms[0]?.percentage ?? 80)
     const finalPct  = 100 - firstPct
-    const firstAmt  = total * (firstPct / 100)
-    const finalAmt  = total - firstAmt
+    const firstAmt  = effectiveTotalForTerms * (firstPct / 100)
+    const finalAmt  = effectiveTotalForTerms - firstAmt
 
     const quotePayload = {
       client_id:                   data.client_id,
@@ -314,6 +325,7 @@ export default function QuoteForm({ mode, initialData, preselectedClientId }: Qu
       discount:                    discountAmt,
       tax:                         taxAmt,
       total,
+      commercial_total:            commercialTotal,
       initial_payment_percentage:  firstPct,
       initial_payment_amount:      firstAmt,
       final_payment_percentage:    finalPct,
@@ -565,8 +577,42 @@ export default function QuoteForm({ mode, initialData, preselectedClientId }: Qu
                 </div>
               </div>
               <div className="border-t border-gray-100 pt-3 flex items-center justify-between">
-                <span className="text-base font-semibold text-[var(--myd-text)]">Total</span>
-                <span className="text-xl font-bold text-[var(--myd-text)]">{formatCurrency(total)}</span>
+                <span className="text-sm text-[var(--myd-muted)]">Total calculado por partidas</span>
+                <span className="text-sm font-medium text-[var(--myd-text)]">{formatCurrency(total)}</span>
+              </div>
+
+              {/* Monto total comercial (Cocina) */}
+              {watchedProjectType === 'kitchen' && (
+                <div className="border border-blue-200 bg-blue-50 rounded-lg px-4 py-3 space-y-2">
+                  <div>
+                    <label className="block text-sm font-semibold text-[var(--myd-text)] mb-1">
+                      Monto total cotizado
+                    </label>
+                    <p className="text-xs text-[var(--myd-muted)] mb-2">
+                      Este valor reemplaza el total calculado como monto comercial definitivo de la cotización.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-[var(--myd-muted)] font-medium">$</span>
+                      <input
+                        {...register('commercial_total', {
+                          setValueAs: v => v === '' || v == null ? null : Number(v),
+                        })}
+                        type="number" min="0" step="0.01" placeholder="Ingresa el monto total..."
+                        className="flex-1 px-3 py-2 border border-blue-300 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-[var(--myd-blue)] bg-white font-semibold"
+                      />
+                    </div>
+                  </div>
+                  {watchedCommercialTotal != null && watchedCommercialTotal > 0 && (
+                    <p className="text-xs text-blue-700 font-medium">
+                      Monto final: {formatCurrency(watchedCommercialTotal)}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="border-t border-gray-100 pt-3 flex items-center justify-between">
+                <span className="text-base font-semibold text-[var(--myd-text)]">Monto total</span>
+                <span className="text-xl font-bold text-[var(--myd-text)]">{formatCurrency(effectiveTotal)}</span>
               </div>
             </div>
           </SectionCard>
@@ -594,7 +640,6 @@ export default function QuoteForm({ mode, initialData, preselectedClientId }: Qu
             <div className="divide-y divide-gray-100">
               {termFields.map((field, idx) => {
                 const pct = Number(watchedTerms[idx]?.percentage) || 0
-                const termAmt = total * (pct / 100)
                 return (
                   <div key={field.id} className="px-6 py-3 flex items-center gap-3">
                     <span className="text-xs font-medium text-[var(--myd-muted)] w-4 shrink-0">{idx + 1}</span>
@@ -607,7 +652,7 @@ export default function QuoteForm({ mode, initialData, preselectedClientId }: Qu
                       <span className="text-sm text-[var(--myd-muted)]">%</span>
                     </div>
                     <p className="text-sm font-semibold text-[var(--myd-text)] w-28 text-right shrink-0">
-                      {formatCurrency(termAmt)}
+                      {formatCurrency(effectiveTotal * (pct / 100))}
                     </p>
                     <button type="button" onClick={() => removeTerm(idx)} disabled={termFields.length === 1}
                       className="text-gray-400 hover:text-red-500 disabled:opacity-30 transition-colors">

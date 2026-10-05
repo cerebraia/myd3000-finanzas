@@ -217,6 +217,7 @@ export interface Quote {
   project_type: ProjectType | null
   responsible_architect_name: string | null
   responsible_architect_id: string | null
+  commercial_total: number | null
   company_signed_at: string | null
   company_signed_by: string | null
   client_signed_at: string | null

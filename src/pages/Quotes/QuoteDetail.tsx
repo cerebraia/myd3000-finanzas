@@ -456,9 +456,19 @@ export default function QuoteDetail() {
               <span className="text-[var(--myd-text)]">{formatCurrency(quote.tax)}</span>
             </div>
           )}
+          {quote.commercial_total != null && quote.commercial_total > 0 && (
+            <div className="flex justify-between text-sm">
+              <span className="text-[var(--myd-muted)]">Total calculado por partidas</span>
+              <span className="text-[var(--myd-text)]">{formatCurrency(quote.total)}</span>
+            </div>
+          )}
           <div className="border-t border-gray-100 pt-3 flex justify-between">
-            <span className="text-base font-semibold text-[var(--myd-text)]">Total</span>
-            <span className="text-2xl font-bold text-[var(--myd-text)]">{formatCurrency(quote.total)}</span>
+            <span className="text-base font-semibold text-[var(--myd-text)]">
+              {quote.commercial_total != null && quote.commercial_total > 0 ? 'Monto total cotizado' : 'Total'}
+            </span>
+            <span className="text-2xl font-bold text-[var(--myd-text)]">
+              {formatCurrency(quote.commercial_total != null && quote.commercial_total > 0 ? quote.commercial_total : quote.total)}
+            </span>
           </div>
 
           {/* Condiciones de pago */}

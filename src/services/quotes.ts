@@ -96,6 +96,7 @@ export interface CreateQuoteData {
   project_type?: string | null
   responsible_architect_name?: string | null
   responsible_architect_id?: string | null
+  commercial_total?: number | null
 }
 
 export async function createQuoteWithItems(

@@ -84,9 +84,14 @@ export default function QuotePrint() {
   const signerName       = company?.authorized_signer_name     ?? null
   const signerPosition   = company?.authorized_signer_position ?? 'Representante autorizado'
 
+  // effective total: use commercial_total when set, otherwise calculated total
+  const effectiveTotal = (quote.commercial_total != null && quote.commercial_total > 0)
+    ? quote.commercial_total
+    : quote.total
+
   // Fallback payment when no payment_terms exist
-  const initialAmt = quote.total * (quote.initial_payment_percentage / 100)
-  const finalAmt   = quote.total - initialAmt
+  const initialAmt = effectiveTotal * (quote.initial_payment_percentage / 100)
+  const finalAmt   = effectiveTotal - initialAmt
 
   return (
     <>
@@ -147,10 +152,10 @@ export default function QuotePrint() {
             </div>
             {/* Número de cotización */}
             <div style={{ textAlign: 'right' }}>
-              <p style={{ fontSize: '7.5pt', color: MUTED, letterSpacing: '0.12em', textTransform: 'uppercase', fontWeight: 600 }}>
+              <p style={{ fontSize: '14pt', fontWeight: 700, color: NAVY, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                 Cotización
               </p>
-              <p style={{ fontSize: '20pt', fontWeight: 700, color: NAVY, marginTop: '2px', lineHeight: 1 }}>
+              <p style={{ fontSize: '9.5pt', color: MUTED, marginTop: '3px', fontWeight: 500 }}>
                 {quoteNum}
               </p>
               <p style={{ fontSize: '8.5pt', color: MUTED, marginTop: '6px' }}>
@@ -293,13 +298,19 @@ export default function QuotePrint() {
                       <span>{formatCurrency(quote.tax)}</span>
                     </div>
                   )}
+                  {quote.commercial_total != null && quote.commercial_total > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '8pt', color: MUTED, padding: '3px 0', fontStyle: 'italic' }}>
+                      <span>Total calculado por partidas</span>
+                      <span>{formatCurrency(quote.total)}</span>
+                    </div>
+                  )}
                   <div style={{
                     display: 'flex', justifyContent: 'space-between',
                     borderTop: `2px solid ${NAVY}`, marginTop: '6px', paddingTop: '8px',
                     fontWeight: 700, color: NAVY,
                   }}>
                     <span style={{ fontSize: '9pt', letterSpacing: '0.06em' }}>MONTO TOTAL</span>
-                    <span style={{ fontSize: '13pt' }}>{formatCurrency(quote.total)}</span>
+                    <span style={{ fontSize: '13pt' }}>{formatCurrency(effectiveTotal)}</span>
                   </div>
                 </div>
               </div>
